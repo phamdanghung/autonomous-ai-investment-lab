@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum RunMode {
+  HISTORICAL_REPLAY
+  LIVE_FORWARD
+}
+
+enum RunStatus {
+  INITIALIZED
+  CONFIGURED
+  RUNNING
+  PAUSED
+  FAILED
+  TERMINATED
+  SEALED
+}
+
+enum ActorType {
+  SYSTEM
+  ADMIN
+  VIEWER
+}
+
+model RunCoreConfigVersion {
+  id                      String   @id @default(uuid())
+  contentHash             String   @unique
+  mode                    RunMode
+  initialCapital          BigInt
+  codeVersion             String
+  rngSeed                 BigInt
+  fillPolicyVersionKey    String
+  orchestrationVersionKey String
+  createdAt               DateTime @default(now())
+  sealedAt                DateTime @default(now())
+
+  runs                    SimulationRun[]
+}
+
+model SimulationRun {
+  id                     String    @id @default(uuid())
+  runBusinessKey         String?   @unique
+  creationIdempotencyKey String    @unique
+  creationRequestHash    String
+  configVersionId        String
+  mode                   RunMode
+  status                 RunStatus @default(INITIALIZED)
+  dataOriginHash         String?
+  canonicalStartDate     DateTime? @db.Date
+  simulationDate         DateTime? @db.Date
+  dataCutoffAt           DateTime?
+  createdAt              DateTime  @default(now())
+  startedAt              DateTime?
+  terminatedAt           DateTime?
+  sealedAt               DateTime?
+  version                Int       @default(1)
+
+  configVersion          RunCoreConfigVersion @relation(fields: [configVersionId], references: [id], onDelete: Restrict)
+  events                 SimulationRunEvent[]
+
+  @@index([status])
+  @@index([mode])
+  @@index([createdAt])
+}
+
+model SimulationRunEvent {
+  id                   String    @id @default(uuid())
+  runId                String
+  eventSequence        Int
+  eventType            String
+  fromStatus           RunStatus?
+  toStatus             RunStatus
+  simulationDateBefore DateTime? @db.Date
+  simulationDateAfter  DateTime? @db.Date
+  actorType            ActorType
+  actorBusinessKey     String
+  reason               String?
+  idempotencyKey       String    @unique
+  requestHash          String
+  recordedAt           DateTime  @default(now())
+  payloadJson          String
+  previousHash         String
+  eventHash            String
+
+  run                  SimulationRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@unique([runId, eventSequence])
+  @@index([runId, eventSequence])
+}

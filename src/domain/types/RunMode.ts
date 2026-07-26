@@ -1,0 +1,4 @@
+export enum RunMode {
+  LIVE_FORWARD = 'LIVE_FORWARD',
+  HISTORICAL_REPLAY = 'HISTORICAL_REPLAY',
+}

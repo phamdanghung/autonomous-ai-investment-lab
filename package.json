@@ -1,0 +1,46 @@
+{
+  "name": "autonomous-ai-investment-lab",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "node scripts/run-tests.mjs integration",
+    "test:security": "node scripts/run-tests.mjs security",
+    "test:concurrency": "node scripts/run-tests.mjs concurrency",
+    "test:regression": "node scripts/run-tests.mjs unit integration security concurrency",
+    "db:generate": "prisma generate",
+    "db:validate": "prisma validate",
+    "db:check": "tsx scripts/db-check.ts",
+    "db:migrate:create": "prisma migrate dev --create-only --name phase_1a_init",
+    "db:migrate:deploy:test": "node scripts/run-prisma-test.mjs migrate deploy",
+    "db:migrate:status:test": "node scripts/run-prisma-test.mjs migrate status",
+    "db:seed:test": "npx tsx scripts/verify-seed-idempotency.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "next": "^16.2.11",
+    "pino": "^10.3.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "uuid": "^14.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.2.11",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}
