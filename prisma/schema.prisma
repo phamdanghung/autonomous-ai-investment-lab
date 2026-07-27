@@ -94,3 +94,232 @@ model SimulationRunEvent {
   @@unique([runId, eventSequence])
   @@index([runId, eventSequence])
 }
+
+enum MarketExchange {
+  HOSE
+  HNX
+  UPCOM
+}
+
+enum SecurityType {
+  EQUITY
+}
+
+enum CurrencyCode {
+  VND
+}
+
+enum MarketDayType {
+  TRADING
+  CLOSED
+  SPECIAL
+}
+
+enum MarketDatasetKind {
+  EOD_MARKET_DATA
+}
+
+enum MarketAdapterKind {
+  REPOSITORY_CSV_FIXTURE
+}
+
+enum MarketPriceUnit {
+  VND_PER_SHARE
+}
+
+enum SourceEncoding {
+  UTF8
+}
+
+enum MarketImportMode {
+  INITIAL
+  CORRECTION
+}
+
+enum MarketImportStatus {
+  PENDING
+  COMPLETED
+  COMPLETED_WITH_QUARANTINE
+  FAILED
+}
+
+enum MarketBarKind {
+  TRADED
+  NO_TRADE
+  SUSPENDED
+}
+
+enum MarketQualityDecision {
+  ACCEPTED
+  ACCEPTED_WITH_FLAGS
+  QUARANTINED
+}
+
+enum DatasetSnapshotStatus {
+  DRAFT
+  SEALED
+}
+
+model MarketInstrument {
+  id              String         @id @default(uuid())
+  businessKey     String         @unique
+  exchange        MarketExchange
+  canonicalSymbol String
+  securityType    SecurityType
+  currency        CurrencyCode
+  effectiveFrom   DateTime       @db.Date
+  effectiveTo     DateTime?      @db.Date
+  createdAt       DateTime       @default(now())
+  sealedAt        DateTime
+
+  dailyBars       DailyMarketBar[]
+
+  @@index([exchange, canonicalSymbol, securityType, effectiveFrom])
+}
+
+model TradingCalendarDay {
+  id              String         @id @default(uuid())
+  sourceVersionId String
+  exchange        MarketExchange
+  marketDate      DateTime       @db.Date
+  dayType         MarketDayType
+  reason          String?
+  canonicalHash   String         @unique
+  createdAt       DateTime       @default(now())
+
+  sourceVersion   MarketDataSourceVersion @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceVersionId, exchange, marketDate])
+  @@index([exchange, marketDate])
+}
+
+model MarketDataSourceVersion {
+  id                      String             @id @default(uuid())
+  sourceKey               String             @unique
+  providerCode            String
+  datasetKind             MarketDatasetKind
+  adapterKind             MarketAdapterKind
+  adapterVersion          String
+  schemaVersion           String
+  canonicalizationVersion String
+  priceUnit               MarketPriceUnit
+  encoding                SourceEncoding
+  contractHash            String             @unique
+  createdAt               DateTime           @default(now())
+  sealedAt                DateTime
+
+  calendarDays            TradingCalendarDay[]
+  importBatches           MarketDataImportBatch[]
+  dailyBars               DailyMarketBar[]
+  snapshots               DatasetSnapshot[]
+}
+
+model MarketDataImportBatch {
+  id                     String             @id @default(uuid())
+  batchBusinessKey       String             @unique
+  creationIdempotencyKey String             @unique
+  creationRequestHash    String
+  sourceVersionId        String
+  sourceObjectKey        String
+  sourceContentHash      String
+  sourceByteSize         BigInt
+  declaredRowCount       Int?
+  parsedRowCount         Int                @default(0)
+  acceptedRowCount       Int                @default(0)
+  flaggedRowCount        Int                @default(0)
+  quarantinedRowCount    Int                @default(0)
+  importMode             MarketImportMode
+  status                 MarketImportStatus
+  startedAt              DateTime
+  completedAt            DateTime?
+  failedAt               DateTime?
+  failureCode            String?
+  createdAt              DateTime           @default(now())
+
+  sourceVersion          MarketDataSourceVersion @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  dailyBars              DailyMarketBar[]
+
+  @@index([sourceVersionId, status, createdAt])
+}
+
+model DailyMarketBar {
+  id                String                @id @default(uuid())
+  sourceVersionId   String
+  importBatchId     String
+  sourceRecordKey   String
+  instrumentId      String
+  marketDate        DateTime              @db.Date
+  barKind           MarketBarKind
+  open              BigInt?
+  high              BigInt?
+  low               BigInt?
+  close             BigInt?
+  volume            BigInt
+  tradingValue      BigInt?
+  correctionVersion Int
+  supersedesBarId   String?               @unique
+  qualityDecision   MarketQualityDecision
+  qualityFlags      String
+  sourceRowHash     String
+  canonicalHash     String                @unique
+  recordedAt        DateTime              @default(now())
+
+  sourceVersion     MarketDataSourceVersion @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  importBatch       MarketDataImportBatch   @relation(fields: [importBatchId], references: [id], onDelete: Restrict)
+  instrument        MarketInstrument        @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  supersedesBar     DailyMarketBar?         @relation("SupersedesBar", fields: [supersedesBarId], references: [id], onDelete: Restrict)
+  supersededByBar   DailyMarketBar?         @relation("SupersedesBar")
+  snapshotEntries   DatasetSnapshotEntry[]
+
+  @@unique([sourceVersionId, instrumentId, marketDate, correctionVersion])
+  @@unique([sourceVersionId, sourceRecordKey, correctionVersion])
+  @@index([instrumentId, marketDate])
+  @@index([importBatchId])
+}
+
+model DatasetSnapshot {
+  id                      String                @id @default(uuid())
+  businessKey             String                @unique
+  sourceVersionId         String
+  rangeStart              DateTime              @db.Date
+  rangeEnd                DateTime              @db.Date
+  universeDefinitionJson  String
+  universeHash            String
+  dataCutoffKey           String
+  dataCutoffAt            DateTime?
+  canonicalizationVersion String
+  rowCount                Int
+  manifestHash            String
+  contentHash             String
+  status                  DatasetSnapshotStatus
+  creationIdempotencyKey  String                @unique
+  creationRequestHash     String
+  createdAt               DateTime              @default(now())
+  sealedAt                DateTime?
+
+  sourceVersion           MarketDataSourceVersion @relation(fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  entries                 DatasetSnapshotEntry[]
+
+  @@index([manifestHash])
+  @@index([contentHash])
+  @@index([status, rangeStart, rangeEnd])
+}
+
+model DatasetSnapshotEntry {
+  id                    String          @id @default(uuid())
+  snapshotId            String
+  dailyBarId            String
+  entrySequence         Int
+  instrumentBusinessKey String
+  marketDate            DateTime        @db.Date
+  barCanonicalHash      String
+  entryHash             String
+
+  snapshot              DatasetSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  dailyBar              DailyMarketBar  @relation(fields: [dailyBarId], references: [id], onDelete: Restrict)
+
+  @@unique([snapshotId, entrySequence])
+  @@unique([snapshotId, dailyBarId])
+  @@unique([snapshotId, instrumentBusinessKey, marketDate])
+  @@unique([snapshotId, entryHash])
+}
