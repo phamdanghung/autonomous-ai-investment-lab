@@ -16,6 +16,7 @@ export const MARKET_DATA_CONTRACT_VERSIONS = {
   SNAPSHOT_ENTRY: '1.0',
   SNAPSHOT_MANIFEST: '1.0',
   SNAPSHOT_CONTENT: '1.0',
+  TRADING_CALENDAR_DAY: '1.0',
 } as const;
 
 export type CanonicalInstrumentBusinessKeyPayload = {
