@@ -60,4 +60,14 @@ describe('MarketDataErrors', () => {
       expect(expectedCategories).toContain(cat);
     }
   });
+
+  it('MarketDataConcurrencyConflictError metadata contract', () => {
+    const error = new Errors.MarketDataConcurrencyConflictError();
+    expect(error.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
+    expect(error.category).toBe('CONCURRENCY');
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe('Concurrent market-data operation conflict.');
+    expect(error.safeMessage).toBe('Concurrent market-data operation conflict.');
+    expect(error.safeMessage).toBe(error.message);
+  });
 });

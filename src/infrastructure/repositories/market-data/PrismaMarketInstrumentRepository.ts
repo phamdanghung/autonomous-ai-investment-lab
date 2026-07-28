@@ -21,7 +21,7 @@ function rethrowKnownPrismaMarketDataError(error: unknown): never {
   }
   if (hasPrismaErrorCode(error)) {
     if (error.code === 'P2034') {
-      throw new MarketDataConcurrencyConflictError('Concurrent market-data operation conflict.');
+      throw new MarketDataConcurrencyConflictError();
     }
     if (error.code.startsWith('P2')) {
       throw new MarketDataIntegrityError('Market data database integrity operation failed.');
@@ -88,7 +88,7 @@ export class PrismaMarketDataTransactionRunner implements IMarketInstrumentTrans
             throw error;
           }
           if (hasPrismaErrorCode(error) && error.code === 'P2034') {
-            throw new MarketDataConcurrencyConflictError('Concurrent market-data operation conflict.');
+            throw new MarketDataConcurrencyConflictError();
           }
           throw error;
         } finally {
@@ -100,7 +100,7 @@ export class PrismaMarketDataTransactionRunner implements IMarketInstrumentTrans
         throw error;
       }
       if (hasPrismaErrorCode(error) && error.code === 'P2034') {
-        throw new MarketDataConcurrencyConflictError('Concurrent market-data operation conflict.');
+        throw new MarketDataConcurrencyConflictError();
       }
       throw error;
     }
@@ -290,7 +290,7 @@ export class PrismaMarketInstrumentTransactionalRepository implements IMarketIns
         }
 
         // record exists and effectiveTo is null but update returned 0 (impossible locally but requested by rule)
-        throw new MarketDataConcurrencyConflictError('Concurrent modification prevented closure');
+        throw new MarketDataConcurrencyConflictError();
       }
 
       const updated = await tx.marketInstrument.findUnique({

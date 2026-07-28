@@ -110,9 +110,17 @@ export class MarketImportNotFoundError extends MarketDataDomainError {
 }
 
 // ----------------- GENERIC / SYSTEM ERRORS -----------------
+const MARKET_DATA_CONCURRENCY_MESSAGE = 'Concurrent market-data operation conflict.';
+
 export class MarketDataConcurrencyConflictError extends MarketDataDomainError {
-  constructor(message: string = 'Concurrent market-data operation conflict.') {
-    super(message, 'MARKET_DATA_CONCURRENCY_CONFLICT', 'The operation could not be completed due to a concurrent update. Please try again.', 'CONCURRENCY', true);
+  constructor() {
+    super(
+      MARKET_DATA_CONCURRENCY_MESSAGE,
+      'MARKET_DATA_CONCURRENCY_CONFLICT',
+      MARKET_DATA_CONCURRENCY_MESSAGE,
+      'CONCURRENCY',
+      true
+    );
   }
 }
 

@@ -372,8 +372,9 @@ describe('MarketInstrument Integration Tests', () => {
       expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
       expect(caughtError.category).toBe('CONCURRENCY');
       expect(caughtError.retryable).toBe(true);
-      expect(caughtError.safeMessage).toBe('The operation could not be completed due to a concurrent update. Please try again.');
+      expect(caughtError.safeMessage).toBe('Concurrent market-data operation conflict.');
       expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
+      expect(caughtError.safeMessage).toBe(caughtError.message);
       expect(caughtError.message).not.toContain('RAW PRISMA ENGINE MESSAGE');
       expect(caughtError.message).not.toContain('P2034');
       expect(caughtError.message).not.toContain('clientVersion');
@@ -408,8 +409,9 @@ describe('MarketInstrument Integration Tests', () => {
       expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
       expect(caughtError.category).toBe('CONCURRENCY');
       expect(caughtError.retryable).toBe(true);
-      expect(caughtError.safeMessage).toBe('The operation could not be completed due to a concurrent update. Please try again.');
+      expect(caughtError.safeMessage).toBe('Concurrent market-data operation conflict.');
       expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
+      expect(caughtError.safeMessage).toBe(caughtError.message);
       expect(caughtError.message).not.toContain('RAW PRISMA ENGINE MESSAGE');
     });
 
@@ -436,8 +438,9 @@ describe('MarketInstrument Integration Tests', () => {
       expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
       expect(caughtError.category).toBe('CONCURRENCY');
       expect(caughtError.retryable).toBe(true);
-      expect(caughtError.safeMessage).toBe('The operation could not be completed due to a concurrent update. Please try again.');
+      expect(caughtError.safeMessage).toBe('Concurrent market-data operation conflict.');
       expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
+      expect(caughtError.safeMessage).toBe(caughtError.message);
       expect(caughtError.message).not.toContain('RAW PRISMA ENGINE MESSAGE');
     });
 
@@ -452,7 +455,7 @@ describe('MarketInstrument Integration Tests', () => {
     });
 
     it('23. Existing MarketDataConcurrencyConflictError is not wrapped again', async () => {
-      const originalError = new MarketDataConcurrencyConflictError('TEST_CONCURRENCY');
+      const originalError = new MarketDataConcurrencyConflictError();
       const mockTx = {
         marketInstrument: {
           create: () => Promise.reject(originalError)
