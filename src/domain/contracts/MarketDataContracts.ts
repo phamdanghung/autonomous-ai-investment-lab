@@ -1,4 +1,9 @@
-export type MarketExchange = 'HOSE' | 'HNX' | 'UPCOM';
+export const MARKET_EXCHANGES = ['HOSE', 'HNX', 'UPCOM'] as const;
+export type MarketExchange = (typeof MARKET_EXCHANGES)[number];
+
+export const MARKET_DAY_TYPES = ['TRADING_DAY', 'WEEKEND', 'HOLIDAY', 'SYSTEM_MAINTENANCE', 'OTHER'] as const;
+export type MarketDayType = (typeof MARKET_DAY_TYPES)[number];
+
 export type SecurityType = 'EQUITY';
 export type MarketImportMode = 'INITIAL' | 'CORRECTION';
 export type MarketBarKind = 'TRADED' | 'NO_TRADE' | 'SUSPENDED';

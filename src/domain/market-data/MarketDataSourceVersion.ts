@@ -8,6 +8,16 @@ export interface MarketDataSourceVersion {
   contractHash: string; // 64-char lowercase hex
   providerCode: string;
   datasetKind: MarketDatasetKind;
+  /**
+   * System-generated seal timestamp.
+   *
+   * Callers must not provide this value.
+   * The Application layer supplies it through an injected clock.
+   * It does not participate in contractHash or sourceKey.
+   * It is excluded from replay equality.
+   * Exact replay returns the existing sealedAt value.
+   * Conflict outcomes do not modify the stored value.
+   */
   sealedAt: Date;
   adapterKind: MarketAdapterKind;
   adapterVersion: string;

@@ -12,7 +12,7 @@ describe('TradingCalendarDayDomain', () => {
   describe('buildCanonicalHash', () => {
     it('should build payload and hash', () => {
       const { payload, hash } = TradingCalendarDayDomain.buildCanonicalHash(
-        'VN|MARKET_DATA_SOURCE|abcd',
+        'VN|MARKET_DATA_SOURCE|1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
         'HOSE',
         '2024-01-01',
         'TRADING_DAY',
@@ -28,7 +28,7 @@ describe('TradingCalendarDayDomain', () => {
 
     it('should handle null reason', () => {
       const { payload } = TradingCalendarDayDomain.buildCanonicalHash(
-        'key',
+        'VN|MARKET_DATA_SOURCE|1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
         'HNX',
         '2024-01-01',
         'HOLIDAY',

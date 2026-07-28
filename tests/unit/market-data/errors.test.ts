@@ -11,6 +11,7 @@ describe('MarketDataErrors', () => {
       'MARKET_SOURCE_VERSION_INVALID',
       'MARKET_SOURCE_VERSION_CONFLICT',
       'MARKET_SOURCE_VERSION_NOT_FOUND',
+      'TRADING_CALENDAR_INVALID',
       'TRADING_CALENDAR_CONFLICT',
       'TRADING_CALENDAR_NOT_FOUND',
       'MARKET_IMPORT_INVALID',
@@ -52,7 +53,7 @@ describe('MarketDataErrors', () => {
 
     actualCodes.sort();
     expect(actualCodes).toEqual(expectedCodes);
-    expect(actualCodes.length).toBe(16);
+    expect(actualCodes.length).toBe(17);
 
     // Verify all categories belong to the expected type subset
     const expectedCategories = ['VALIDATION', 'CONFLICT', 'NOT_FOUND', 'BUSINESS_RULE', 'SYSTEM_INTEGRITY', 'CONCURRENCY'];

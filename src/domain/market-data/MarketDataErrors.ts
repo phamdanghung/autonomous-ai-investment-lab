@@ -66,6 +66,18 @@ export class MarketSourceVersionNotFoundError extends MarketDataDomainError {
 }
 
 // ----------------- CALENDAR ERRORS -----------------
+export class TradingCalendarInvalidError extends MarketDataDomainError {
+  constructor(message: string = 'Trading calendar day contains invalid data.') {
+    super(
+      message,
+      'TRADING_CALENDAR_INVALID',
+      'The provided trading calendar day is invalid.',
+      'VALIDATION',
+      false
+    );
+  }
+}
+
 export class TradingCalendarConflictError extends MarketDataDomainError {
   constructor(message: string = 'Trading calendar day exists but payload is different.') {
     super(message, 'TRADING_CALENDAR_CONFLICT', 'A conflicting trading calendar day already exists.', 'CONFLICT', false);
