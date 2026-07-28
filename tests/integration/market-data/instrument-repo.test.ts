@@ -8,7 +8,7 @@ import { RegisterMarketInstrumentService } from '../../../src/application/servic
 import { CloseMarketInstrumentListingService } from '../../../src/application/services/market-data/CloseMarketInstrumentListingService';
 import { ListMarketInstrumentsService } from '../../../src/application/services/market-data/ListMarketInstrumentsService';
 import { GetMarketInstrumentService } from '../../../src/application/services/market-data/GetMarketInstrumentService';
-import { MarketInstrumentOverlapError, MarketInstrumentNotFoundError, MarketInstrumentAlreadyClosedError, MarketInstrumentInvalidError, MarketDataIntegrityError } from '../../../src/domain/market-data/MarketDataErrors';
+import { MarketInstrumentOverlapError, MarketInstrumentNotFoundError, MarketInstrumentAlreadyClosedError, MarketInstrumentInvalidError, MarketDataIntegrityError, MarketDataConcurrencyConflictError } from '../../../src/domain/market-data/MarketDataErrors';
 import { MarketInstrumentDomain } from '../../../src/domain/market-data/MarketInstrument';
 
 describe('MarketInstrument Integration Tests', () => {
@@ -344,5 +344,165 @@ describe('MarketInstrument Integration Tests', () => {
       throw new Error('Simulated Rollback');
     })).rejects.toThrow('Simulated Rollback');
     await expect(txRepo.findById(capturedCtx, 'some-id')).rejects.toThrowError('Transaction context has expired and cannot be used');
+  });
+
+  describe('P2034 Error Mapping Verification', () => {
+    const rawPrismaError = Object.assign(
+      new Error("RAW PRISMA ENGINE MESSAGE WITH CONNECTION DETAILS"),
+      {
+        code: "P2034",
+        clientVersion: "6.19.3",
+      }
+    );
+
+    it('19. P2034 in runInTransaction boundary maps safely', async () => {
+      const mockPrisma = {
+        $transaction: () => Promise.reject(rawPrismaError)
+      } as any;
+      const testAdapters = createPrismaMarketInstrumentAdapters(mockPrisma);
+
+      let caughtError: any;
+      try {
+        await testAdapters.transactionRunner.runInTransaction(async () => {});
+      } catch (e) {
+        caughtError = e;
+      }
+
+      expect(caughtError).toBeInstanceOf(MarketDataConcurrencyConflictError);
+      expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
+      expect(caughtError.category).toBe('CONCURRENCY');
+      expect(caughtError.retryable).toBe(true);
+      expect(caughtError.safeMessage).toBe('The operation could not be completed due to a concurrent update. Please try again.');
+      expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
+      expect(caughtError.message).not.toContain('RAW PRISMA ENGINE MESSAGE');
+      expect(caughtError.message).not.toContain('P2034');
+      expect(caughtError.message).not.toContain('clientVersion');
+    });
+
+    it('20. P2034 in insertListing maps safely', async () => {
+      const mockTx = {
+        marketInstrument: {
+          create: () => Promise.reject(rawPrismaError)
+        }
+      } as any;
+
+      const testToken = Symbol('P2034Insert');
+      const testAdapters = createPrismaMarketInstrumentAdapters(prisma, testToken);
+      const fakeCtx = new PrismaTransactionContext(testToken, mockTx);
+
+      let caughtError: any;
+      try {
+        await testAdapters.transactionalRepository.insertListing(fakeCtx, {
+          businessKey: 'TEST',
+          exchange: 'HOSE',
+          canonicalSymbol: 'TEST',
+          securityType: 'EQUITY',
+          effectiveFrom: '2023-01-01',
+          effectiveTo: null
+        });
+      } catch (e) {
+        caughtError = e;
+      }
+
+      expect(caughtError).toBeInstanceOf(MarketDataConcurrencyConflictError);
+      expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
+      expect(caughtError.category).toBe('CONCURRENCY');
+      expect(caughtError.retryable).toBe(true);
+      expect(caughtError.safeMessage).toBe('The operation could not be completed due to a concurrent update. Please try again.');
+      expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
+      expect(caughtError.message).not.toContain('RAW PRISMA ENGINE MESSAGE');
+    });
+
+    it('21. P2034 in closeOpenListing maps safely', async () => {
+      const mockTx = {
+        $executeRaw: () => Promise.reject(rawPrismaError)
+      } as any;
+
+      const testToken = Symbol('P2034Close');
+      const testAdapters = createPrismaMarketInstrumentAdapters(prisma, testToken);
+      const fakeCtx = new PrismaTransactionContext(testToken, mockTx);
+
+      let caughtError: any;
+      try {
+        await testAdapters.transactionalRepository.closeOpenListing(fakeCtx, {
+          id: 'TEST_ID',
+          effectiveTo: '2023-12-31'
+        });
+      } catch (e) {
+        caughtError = e;
+      }
+
+      expect(caughtError).toBeInstanceOf(MarketDataConcurrencyConflictError);
+      expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
+      expect(caughtError.category).toBe('CONCURRENCY');
+      expect(caughtError.retryable).toBe(true);
+      expect(caughtError.safeMessage).toBe('The operation could not be completed due to a concurrent update. Please try again.');
+      expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
+      expect(caughtError.message).not.toContain('RAW PRISMA ENGINE MESSAGE');
+    });
+
+    it('22. Existing MarketInstrumentOverlapError is rethrown unchanged', async () => {
+      const originalError = new MarketInstrumentOverlapError('TEST_OVERLAP');
+      const mockPrisma = {
+        $transaction: () => Promise.reject(originalError)
+      } as any;
+      const testAdapters = createPrismaMarketInstrumentAdapters(mockPrisma);
+
+      await expect(testAdapters.transactionRunner.runInTransaction(async () => {})).rejects.toBe(originalError);
+    });
+
+    it('23. Existing MarketDataConcurrencyConflictError is not wrapped again', async () => {
+      const originalError = new MarketDataConcurrencyConflictError('TEST_CONCURRENCY');
+      const mockTx = {
+        marketInstrument: {
+          create: () => Promise.reject(originalError)
+        }
+      } as any;
+
+      const testToken = Symbol('P2034InsertDomain');
+      const testAdapters = createPrismaMarketInstrumentAdapters(prisma, testToken);
+      const fakeCtx = new PrismaTransactionContext(testToken, mockTx);
+
+      await expect(testAdapters.transactionalRepository.insertListing(fakeCtx, {
+        businessKey: 'TEST',
+        exchange: 'HOSE',
+        canonicalSymbol: 'TEST',
+        securityType: 'EQUITY',
+        effectiveFrom: '2023-01-01',
+        effectiveTo: null
+      })).rejects.toBe(originalError);
+    });
+
+    it('24. Unknown ordinary error is rethrown unchanged', async () => {
+      const originalError = new Error('Unknown plain error');
+      const mockTx = {
+        $executeRaw: () => Promise.reject(originalError)
+      } as any;
+
+      const testToken = Symbol('P2034CloseUnknown');
+      const testAdapters = createPrismaMarketInstrumentAdapters(prisma, testToken);
+      const fakeCtx = new PrismaTransactionContext(testToken, mockTx);
+
+      await expect(testAdapters.transactionalRepository.closeOpenListing(fakeCtx, {
+        id: 'TEST_ID',
+        effectiveTo: '2023-12-31'
+      })).rejects.toBe(originalError);
+    });
+
+    it('25. Other P2* error is mapped to MarketDataIntegrityError', async () => {
+      const genericPrismaError = Object.assign(new Error('Generic P2 error'), { code: 'P2003' });
+      const mockTx = {
+        $executeRaw: () => Promise.reject(genericPrismaError)
+      } as any;
+
+      const testToken = Symbol('P2*Integrity');
+      const testAdapters = createPrismaMarketInstrumentAdapters(prisma, testToken);
+      const fakeCtx = new PrismaTransactionContext(testToken, mockTx);
+
+      await expect(testAdapters.transactionalRepository.closeOpenListing(fakeCtx, {
+        id: 'TEST_ID',
+        effectiveTo: '2023-12-31'
+      })).rejects.toThrowError(MarketDataIntegrityError);
+    });
   });
 });

@@ -2,10 +2,33 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { IMarketInstrumentTransactionPort, IMarketInstrumentTransactionContext, MARKET_INSTRUMENT_TX_CONTEXT } from '../../../application/ports/market-data/IMarketInstrumentTransactionPort';
 import { IMarketInstrumentQueryRepository, MarketInstrumentRecord, MarketInstrumentListRepositoryQuery } from '../../../application/ports/market-data/IMarketInstrumentQueryRepository';
 import { IMarketInstrumentTransactionalRepository, CreateMarketInstrumentRecord, MarketInstrumentIdentity } from '../../../application/ports/market-data/IMarketInstrumentTransactionalRepository';
-import { MarketDataIntegrityError, MarketDataConcurrencyConflictError, MarketInstrumentOverlapError, MarketInstrumentNotFoundError, MarketInstrumentAlreadyClosedError } from '../../../domain/market-data/MarketDataErrors';
+import { MarketDataDomainError, MarketDataIntegrityError, MarketDataConcurrencyConflictError, MarketInstrumentOverlapError, MarketInstrumentNotFoundError, MarketInstrumentAlreadyClosedError } from '../../../domain/market-data/MarketDataErrors';
 import { MarketDataPrismaMappers } from './MarketDataPrismaMappers';
 import { MarketDataAdvisoryLocks } from './MarketDataAdvisoryLocks';
 import { MarketExchange, SecurityType } from '../../../domain/contracts/MarketDataContracts';
+
+function hasPrismaErrorCode(error: unknown): error is Error & { code: string } {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    typeof (error as { code?: unknown }).code === 'string'
+  );
+}
+
+function rethrowKnownPrismaMarketDataError(error: unknown): never {
+  if (error instanceof MarketDataDomainError) {
+    throw error;
+  }
+  if (hasPrismaErrorCode(error)) {
+    if (error.code === 'P2034') {
+      throw new MarketDataConcurrencyConflictError('Concurrent market-data operation conflict.');
+    }
+    if (error.code.startsWith('P2')) {
+      throw new MarketDataIntegrityError('Market data database integrity operation failed.');
+    }
+  }
+  throw error;
+}
 
 type ContextState = {
   readonly ownerToken: symbol;
@@ -55,19 +78,32 @@ export class PrismaMarketDataTransactionRunner implements IMarketInstrumentTrans
   ) {}
 
   async runInTransaction<T>(work: (context: IMarketInstrumentTransactionContext) => Promise<T>): Promise<T> {
-    return await this.prisma.$transaction(async (tx) => {
-      const ctx = new PrismaTransactionContext(this.ownerToken, tx);
-      try {
-        return await work(ctx);
-      } catch (error: any) {
-        if (error.code === 'P2034') {
-          throw new MarketDataConcurrencyConflictError('Concurrent market-data operation conflict.');
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const ctx = new PrismaTransactionContext(this.ownerToken, tx);
+        try {
+          return await work(ctx);
+        } catch (error: any) {
+          if (error instanceof MarketDataDomainError) {
+            throw error;
+          }
+          if (hasPrismaErrorCode(error) && error.code === 'P2034') {
+            throw new MarketDataConcurrencyConflictError('Concurrent market-data operation conflict.');
+          }
+          throw error;
+        } finally {
+          ctx.deactivate();
         }
+      }, { timeout: 20000, maxWait: 15000 });
+    } catch (error: any) {
+      if (error instanceof MarketDataDomainError) {
         throw error;
-      } finally {
-        ctx.deactivate();
       }
-    }, { timeout: 20000, maxWait: 15000 });
+      if (hasPrismaErrorCode(error) && error.code === 'P2034') {
+        throw new MarketDataConcurrencyConflictError('Concurrent market-data operation conflict.');
+      }
+      throw error;
+    }
   }
 }
 
@@ -201,7 +237,7 @@ export class PrismaMarketInstrumentTransactionalRepository implements IMarketIns
         record: MarketDataPrismaMappers.mapToApplicationRecord(record)
       };
     } catch (error: any) {
-      if (error.code === 'P2002') {
+      if (hasPrismaErrorCode(error) && error.code === 'P2002') {
         const existing = await tx.marketInstrument.findUnique({
           where: { businessKey: data.businessKey }
         });
@@ -222,10 +258,7 @@ export class PrismaMarketInstrumentTransactionalRepository implements IMarketIns
         }
       }
 
-      if (error.code?.startsWith('P2')) {
-        throw new MarketDataIntegrityError('Database integrity error during insert');
-      }
-      throw error;
+      rethrowKnownPrismaMarketDataError(error);
     }
   }
 
@@ -270,7 +303,7 @@ export class PrismaMarketInstrumentTransactionalRepository implements IMarketIns
 
       return MarketDataPrismaMappers.mapToApplicationRecord(updated);
     } catch (error: any) {
-      throw new MarketDataIntegrityError(`Database error during closeOpenListing: ${error.message}`);
+      rethrowKnownPrismaMarketDataError(error);
     }
   }
 }
