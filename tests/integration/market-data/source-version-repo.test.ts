@@ -3,7 +3,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { PrismaMarketDataSourceRepository } from '../../../src/infrastructure/repositories/market-data/PrismaMarketDataSourceRepository';
 import { SourceVersionUniqueCollisionError } from '../../../src/application/ports/market-data/MarketDataSourcePorts';
 import { MarketDatasetKind, MarketAdapterKind, MarketPriceUnit, SourceEncoding } from '../../../src/domain/contracts/MarketDataContracts';
-import { MarketDataConcurrencyConflictError, MarketDataDomainError } from '../../../src/domain/market-data/MarketDataErrors';
+import { MarketDataConcurrencyConflictError, MarketDataDomainError, MarketDataIntegrityError } from '../../../src/domain/market-data/MarketDataErrors';
 
 describe('PrismaMarketDataSourceRepository', () => {
   let prisma: PrismaClient;
@@ -136,43 +136,131 @@ describe('PrismaMarketDataSourceRepository', () => {
     }
   });
 
-  it('should map P2034 exactly', async () => {
-    await repo.transaction('TEST_FAM', async (ctx) => {
-      // Mock inside transaction tx object
-      const oldFind = (ctx as any).tx?.marketDataSourceVersion?.findUnique;
-      if (oldFind) {
-         // this is not safe if we cannot access tx! We CANNOT access tx because it's hidden in a WeakMap!
-      }
+  it('should map remaining P2 errors to MarketDataIntegrityError without leaking Prisma messages', async () => {
+    const rawError = new Prisma.PrismaClientKnownRequestError('RAW PRISMA ENGINE MESSAGE', {
+      code: 'P2025',
+      clientVersion: 'test-client-version',
+      meta: { target: ['secret_database_target'] }
     });
-
-    // Instead mock the prisma client method globally
-    const err = new Prisma.PrismaClientKnownRequestError('Concurrency error', { code: 'P2034', clientVersion: '4.0.0' });
     const validateSpy = vi.spyOn(repo as any, 'validateContext').mockReturnValue({
-      marketDataSourceVersion: {
-        create: vi.fn().mockRejectedValue(err)
-      }
+      marketDataSourceVersion: { create: vi.fn().mockRejectedValue(rawError) }
     } as any);
     
-    const validVersion = {
-      id: 'id3',
-      sourceKey: 'key3',
-      contractHash: 'hash3',
-      providerCode: 'TEST',
-      datasetKind: "EOD_MARKET_DATA" as any,
-      sealedAt: new Date(),
-      adapterKind: "REPOSITORY_CSV_FIXTURE" as any,
-      adapterVersion: '1.0',
-      schemaVersion: '1.0',
-      canonicalizationVersion: '1.0',
-      priceUnit: "VND_PER_SHARE" as any,
-      encoding: "UTF8" as any,
-    };
+    let caughtError: any;
+    try {
+      await repo.insert({} as any, {} as any);
+    } catch (e) {
+      caughtError = e;
+    } finally {
+      validateSpy.mockRestore();
+    }
     
-    // We don't use transaction here because we mocked validateContext to just return the fake tx.
-    // wait, repo.insert requires ctx to be passed, validateContext extracts tx.
-    // Since we mocked validateContext, we can pass a dummy context.
-    await expect(repo.insert({} as any, validVersion)).rejects.toThrow(MarketDataConcurrencyConflictError);
+    expect(caughtError).toBeInstanceOf(MarketDataIntegrityError);
+    expect(caughtError.code).toBe('MARKET_DATA_INTEGRITY_ERROR');
+    expect(caughtError.category).toBe('SYSTEM_INTEGRITY');
+    expect(caughtError.retryable).toBe(false);
+    expect(caughtError.safeMessage).toBe('A data integrity error occurred.');
     
-    validateSpy.mockRestore();
+    const msg = caughtError.message + caughtError.safeMessage;
+    expect(msg).not.toContain('RAW PRISMA ENGINE MESSAGE');
+    expect(msg).not.toContain('P2025');
+    expect(msg).not.toContain('test-client-version');
+    expect(msg).not.toContain('secret_database_target');
+    expect(msg).not.toContain('Prisma');
+  });
+
+  it('should map P2034 exactly and not leak Prisma messages', async () => {
+    const rawError = new Prisma.PrismaClientKnownRequestError('RAW PRISMA ENGINE MESSAGE', {
+      code: 'P2034',
+      clientVersion: 'test-client-version',
+      meta: { target: ['secret_database_target'] }
+    });
+    const validateSpy = vi.spyOn(repo as any, 'validateContext').mockReturnValue({
+      marketDataSourceVersion: { create: vi.fn().mockRejectedValue(rawError) }
+    } as any);
+    
+    let caughtError: any;
+    try {
+      await repo.insert({} as any, {} as any);
+    } catch (e) {
+      caughtError = e;
+    } finally {
+      validateSpy.mockRestore();
+    }
+    
+    expect(caughtError).toBeInstanceOf(MarketDataConcurrencyConflictError);
+    expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
+    expect(caughtError.category).toBe('CONCURRENCY');
+    expect(caughtError.retryable).toBe(true);
+    expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
+    expect(caughtError.safeMessage).toBe('Concurrent market-data operation conflict.');
+    
+    const msg = caughtError.message + caughtError.safeMessage;
+    expect(msg).not.toContain('RAW PRISMA ENGINE MESSAGE');
+    expect(msg).not.toContain('P2034');
+    expect(msg).not.toContain('clientVersion');
+    expect(msg).not.toContain('meta');
+    expect(msg).not.toContain('target');
+    expect(msg).not.toContain('Prisma');
+  });
+
+  it('should throw on cross-family context', async () => {
+    const { PrismaTradingCalendarRepository } = await import('../../../src/infrastructure/repositories/market-data/PrismaTradingCalendarRepository');
+    const calendarRepo = new PrismaTradingCalendarRepository(prisma);
+    
+    let calendarCtx: any;
+    await calendarRepo.runTransaction(async (ctx) => {
+      calendarCtx = ctx;
+    });
+    
+    await expect(repo.findBySourceKey(calendarCtx, 'test')).rejects.toThrow('Invalid context');
+  });
+
+  it('should throw on fake context', async () => {
+    await expect(repo.findBySourceKey({} as any, 'test')).rejects.toThrow('Invalid context');
+    await expect(repo.findBySourceKey(Object.create(null), 'test')).rejects.toThrow('Invalid context');
+    await expect(repo.findBySourceKey(new class {}(), 'test')).rejects.toThrow('Invalid context');
+  });
+
+  it('should reject context after commit deactivation', async () => {
+    let capturedCtx: any;
+    await repo.transaction('TEST_FAM', async (ctx) => {
+      capturedCtx = ctx;
+    });
+    await expect(repo.findBySourceKey(capturedCtx, 'test')).rejects.toThrow('expired');
+  });
+
+  it('should reject context after rollback deactivation', async () => {
+    let capturedCtx: any;
+    class ControlledError extends Error {}
+    const err = new ControlledError('rollback');
+    
+    await expect(repo.transaction('TEST_FAM', async (ctx) => {
+      capturedCtx = ctx;
+      throw err;
+    })).rejects.toThrow(err);
+    
+    await expect(repo.findBySourceKey(capturedCtx, 'test')).rejects.toThrow('expired');
+  });
+
+  it('should ensure runtime invisibility of context internals', async () => {
+    await repo.transaction('TEST_FAM', async (ctx) => {
+      expect(Object.keys(ctx)).toEqual([]);
+      expect(Object.getOwnPropertyNames(ctx)).toEqual([]);
+      expect(Object.getOwnPropertySymbols(ctx)).toEqual([]);
+      expect(Object.getOwnPropertyDescriptors(ctx)).toEqual({});
+      expect(JSON.stringify(ctx)).toBe('{}');
+      
+      const str = String(ctx) + JSON.stringify(ctx);
+      expect(str).not.toContain('_tx');
+      expect(str).not.toContain('_family');
+      expect(str).not.toContain('_ownerToken');
+      expect(str).not.toContain('_active');
+      expect(str).not.toContain('tx');
+      expect(str).not.toContain('client');
+      expect(str).not.toContain('prisma');
+      expect(str).not.toContain('token');
+      expect(str).not.toContain('active');
+    });
   });
 });
