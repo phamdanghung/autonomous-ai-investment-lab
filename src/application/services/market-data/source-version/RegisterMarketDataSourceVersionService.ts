@@ -14,8 +14,7 @@ import {
 } from '../../../../domain/market-data/MarketDataErrors';
 import { randomUUID } from 'crypto';
 
-// The sentinel error from PrismaMarketDataSourceRepository
-import { SourceVersionUniqueCollisionError } from '../../../../infrastructure/repositories/market-data/PrismaMarketDataSourceRepository';
+import { SourceVersionUniqueCollisionError } from '../../../ports/market-data/MarketDataSourcePorts';
 
 export interface RegisterMarketDataSourceVersionRequest {
   providerCode: string;
@@ -77,6 +76,8 @@ export class RegisterMarketDataSourceVersionService {
           const bySourceKey = await this.repository.findBySourceKey(ctx, sourceKey);
           if (bySourceKey) {
             if (
+              bySourceKey.sourceKey === sourceKey &&
+              bySourceKey.contractHash === hash &&
               bySourceKey.providerCode === newVersion.providerCode &&
               bySourceKey.datasetKind === newVersion.datasetKind &&
               bySourceKey.adapterKind === newVersion.adapterKind &&

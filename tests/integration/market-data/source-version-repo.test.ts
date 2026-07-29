@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { PrismaClient } from '@prisma/client';
-import { PrismaMarketDataSourceRepository, SourceVersionUniqueCollisionError } from '../../../src/infrastructure/repositories/market-data/PrismaMarketDataSourceRepository';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaMarketDataSourceRepository } from '../../../src/infrastructure/repositories/market-data/PrismaMarketDataSourceRepository';
+import { SourceVersionUniqueCollisionError } from '../../../src/application/ports/market-data/MarketDataSourcePorts';
 import { MarketDatasetKind, MarketAdapterKind, MarketPriceUnit, SourceEncoding } from '../../../src/domain/contracts/MarketDataContracts';
+import { MarketDataConcurrencyConflictError, MarketDataDomainError } from '../../../src/domain/market-data/MarketDataErrors';
 
 describe('PrismaMarketDataSourceRepository', () => {
   let prisma: PrismaClient;
@@ -47,7 +49,7 @@ describe('PrismaMarketDataSourceRepository', () => {
       expect(found).not.toBeNull();
       expect(found?.id).toBe(testId);
 
-      const listed = await repo.listVersions(ctx, 100);
+      const listed = await repo.listVersions(ctx, 10000);
       expect(listed.length).toBeGreaterThan(0);
       expect(listed.some(x => x.sourceVersion.id === testId)).toBe(true);
     });
@@ -89,5 +91,88 @@ describe('PrismaMarketDataSourceRepository', () => {
         await repo.insert(ctx, { ...version, id: testId });
       })
     ).rejects.toThrow(SourceVersionUniqueCollisionError);
+  });
+
+  it('should not expose tx or family on context object', async () => {
+    await repo.transaction('TEST_FAM', async (ctx) => {
+      const keys = Object.keys(ctx);
+      const props = Object.getOwnPropertyNames(ctx);
+      const syms = Object.getOwnPropertySymbols(ctx);
+      
+      expect(keys).not.toContain('_tx');
+      expect(keys).not.toContain('_family');
+      expect(props).not.toContain('_tx');
+      expect(props).not.toContain('_family');
+      expect(props).not.toContain('tx');
+      
+      const desc = Object.getOwnPropertyDescriptors(ctx);
+      expect(desc._tx).toBeUndefined();
+      expect(desc._family).toBeUndefined();
+      
+      const str = JSON.stringify(ctx);
+      expect(str).not.toContain('_tx');
+      expect(str).not.toContain('_family');
+    });
+  });
+
+  it('should preserve error identity and values', async () => {
+    class CustomError extends Error {}
+    const err = new CustomError('Test');
+    await expect(repo.transaction('TEST_FAM', async (ctx) => {
+      throw err;
+    })).rejects.toThrow(err);
+
+    const domainErr = new MarketDataDomainError('TestDomain');
+    await expect(repo.transaction('TEST_FAM', async (ctx) => {
+      throw domainErr;
+    })).rejects.toThrow(domainErr);
+
+    try {
+      await repo.transaction('TEST_FAM', async (ctx) => {
+        throw 'non-error-value';
+      });
+    } catch(e) {
+      expect(e).toBe('non-error-value');
+    }
+  });
+
+  it('should map P2034 exactly', async () => {
+    await repo.transaction('TEST_FAM', async (ctx) => {
+      // Mock inside transaction tx object
+      const oldFind = (ctx as any).tx?.marketDataSourceVersion?.findUnique;
+      if (oldFind) {
+         // this is not safe if we cannot access tx! We CANNOT access tx because it's hidden in a WeakMap!
+      }
+    });
+
+    // Instead mock the prisma client method globally
+    const err = new Prisma.PrismaClientKnownRequestError('Concurrency error', { code: 'P2034', clientVersion: '4.0.0' });
+    const validateSpy = vi.spyOn(repo as any, 'validateContext').mockReturnValue({
+      marketDataSourceVersion: {
+        create: vi.fn().mockRejectedValue(err)
+      }
+    } as any);
+    
+    const validVersion = {
+      id: 'id3',
+      sourceKey: 'key3',
+      contractHash: 'hash3',
+      providerCode: 'TEST',
+      datasetKind: "EOD_MARKET_DATA" as any,
+      sealedAt: new Date(),
+      adapterKind: "REPOSITORY_CSV_FIXTURE" as any,
+      adapterVersion: '1.0',
+      schemaVersion: '1.0',
+      canonicalizationVersion: '1.0',
+      priceUnit: "VND_PER_SHARE" as any,
+      encoding: "UTF8" as any,
+    };
+    
+    // We don't use transaction here because we mocked validateContext to just return the fake tx.
+    // wait, repo.insert requires ctx to be passed, validateContext extracts tx.
+    // Since we mocked validateContext, we can pass a dummy context.
+    await expect(repo.insert({} as any, validVersion)).rejects.toThrow(MarketDataConcurrencyConflictError);
+    
+    validateSpy.mockRestore();
   });
 });

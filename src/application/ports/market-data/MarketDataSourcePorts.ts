@@ -1,7 +1,14 @@
 import { MarketDataSourceVersion } from '../../../domain/market-data/MarketDataSourceVersion';
 
 export interface IMarketDataSourceContext {
-  readonly _family: string;
+  readonly _brand: unique symbol;
+}
+
+export class SourceVersionUniqueCollisionError extends Error {
+  constructor() {
+    super('Source-version unique collision.');
+    this.name = 'SourceVersionUniqueCollisionError';
+  }
 }
 
 export interface MarketDataSourceVersionRow {

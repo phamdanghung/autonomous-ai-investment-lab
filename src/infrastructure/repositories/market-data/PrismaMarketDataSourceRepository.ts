@@ -1,32 +1,23 @@
 import { PrismaClient, Prisma } from '@prisma/client';
-import { IMarketDataSourceContext, IMarketDataSourceRepository, MarketDataSourceVersionRow } from '../../../application/ports/market-data/MarketDataSourcePorts';
-import { PrismaMarketDataSourceContext } from './PrismaMarketDataSourceContext';
+import { IMarketDataSourceContext, IMarketDataSourceRepository, MarketDataSourceVersionRow, SourceVersionUniqueCollisionError } from '../../../application/ports/market-data/MarketDataSourcePorts';
+import { createMarketDataSourceContext, validateAndGetTx, deactivateContext } from './PrismaMarketDataSourceContext';
 import { MarketDataSourcePrismaMappers } from '../../mappers/MarketDataSourcePrismaMappers';
 import { MarketDataSourceVersion } from '../../../domain/market-data/MarketDataSourceVersion';
-import { MarketDataConcurrencyConflictError, MarketDataIntegrityError } from '../../../domain/market-data/MarketDataErrors';
-
-export class SourceVersionUniqueCollisionError extends Error {
-  constructor() {
-    super('SourceVersion unique collision.');
-    this.name = 'SourceVersionUniqueCollisionError';
-  }
-}
+import { MarketDataDomainError, MarketDataConcurrencyConflictError, MarketDataIntegrityError } from '../../../domain/market-data/MarketDataErrors';
 
 export class PrismaMarketDataSourceRepository implements IMarketDataSourceRepository {
+  private readonly ownerToken = Symbol('SourceVersionContextOwner');
+
   constructor(private readonly prisma: PrismaClient, private readonly family: string) {}
 
   private validateContext(ctx: IMarketDataSourceContext): Prisma.TransactionClient {
-    if (!(ctx instanceof PrismaMarketDataSourceContext)) {
-      throw new Error('Invalid context: fake or incompatible context provided.');
-    }
-    if (ctx._family !== this.family) {
-      throw new Error('Invalid context: cross-family context provided.');
-    }
-    // The tx getter will throw if the context is deactivated.
-    return ctx.tx;
+    return validateAndGetTx(ctx, this.ownerToken);
   }
 
   private handleError(error: unknown): never {
+    if (error instanceof MarketDataDomainError) {
+      throw error;
+    }
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2034') {
         throw new MarketDataConcurrencyConflictError();
@@ -35,22 +26,25 @@ export class PrismaMarketDataSourceRepository implements IMarketDataSourceReposi
         throw new SourceVersionUniqueCollisionError();
       }
       if (error.code.startsWith('P2')) {
-        throw new MarketDataIntegrityError(`Prisma error ${error.code}`);
+        throw new MarketDataIntegrityError(`Database integrity error.`);
       }
     }
     throw error;
   }
 
   async transaction<T>(family: string, operation: (ctx: IMarketDataSourceContext) => Promise<T>): Promise<T> {
+    if (family !== this.family) {
+      throw new Error('Family mismatch.');
+    }
     return this.prisma.$transaction(async (tx) => {
-      const ctx = new PrismaMarketDataSourceContext(family, tx);
+      const ctx = createMarketDataSourceContext(tx, this.ownerToken);
       try {
         const result = await operation(ctx);
-        ctx.deactivate();
         return result;
       } catch (error) {
-        ctx.deactivate();
         throw error;
+      } finally {
+        deactivateContext(ctx);
       }
     });
   }
@@ -117,3 +111,4 @@ export class PrismaMarketDataSourceRepository implements IMarketDataSourceReposi
     }
   }
 }
+

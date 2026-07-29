@@ -6,10 +6,11 @@ import {
   CalendarSourceFkViolationError
 } from '../../../application/ports/market-data/TradingCalendarPorts';
 import {
+  MarketDataDomainError,
   MarketDataConcurrencyConflictError,
   MarketDataIntegrityError
 } from '../../../domain/market-data/MarketDataErrors';
-import { PrismaTradingCalendarContext } from './PrismaTradingCalendarContext';
+import { createTradingCalendarContext, validateCalendarContext, deactivateCalendarContext } from './PrismaTradingCalendarContext';
 import { TradingCalendarPrismaMappers } from '../../mappers/TradingCalendarPrismaMappers';
 import { MarketExchange, MarketDayType } from '../../../domain/contracts/MarketDataContracts';
 import { TradingCalendarDay } from '../../../domain/market-data/TradingCalendarDay';
@@ -22,14 +23,14 @@ export class PrismaTradingCalendarRepository implements TradingCalendarRepositor
   async runTransaction<T>(work: (ctx: TradingCalendarTransactionContext) => Promise<T>): Promise<T> {
     try {
       return await this.client.$transaction(async (tx) => {
-        const ctx = new PrismaTradingCalendarContext(tx, this.ownerToken);
+        const ctx = createTradingCalendarContext(tx, this.ownerToken);
         try {
           const result = await work(ctx);
-          ctx.deactivate();
           return result;
         } catch (error) {
-          ctx.deactivate();
           throw error;
+        } finally {
+          deactivateCalendarContext(ctx);
         }
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
@@ -38,19 +39,18 @@ export class PrismaTradingCalendarRepository implements TradingCalendarRepositor
   }
 
   private getTx(ctx: TradingCalendarTransactionContext): Prisma.TransactionClient {
-    if (!(ctx instanceof PrismaTradingCalendarContext)) {
-      throw new Error('Fake context detected.');
-    }
-    ctx.validate(this.ownerToken);
-    return ctx.tx;
+    return validateCalendarContext(ctx, this.ownerToken);
   }
 
   private handlePrismaError(error: any): never {
+    if (error instanceof MarketDataDomainError) {
+      throw error;
+    }
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2034') throw new MarketDataConcurrencyConflictError();
       if (error.code === 'P2002') throw new CalendarUniqueCollisionError();
       if (error.code === 'P2003') throw new CalendarSourceFkViolationError();
-      if (error.code.startsWith('P2')) throw new MarketDataIntegrityError(`Prisma error: ${error.code}`);
+      if (error.code.startsWith('P2')) throw new MarketDataIntegrityError(`Database integrity error.`);
     }
     throw error;
   }

@@ -4,7 +4,8 @@ import { GetMarketDataSourceVersionService } from '../../../../src/application/s
 import { ListMarketDataSourceVersionsService } from '../../../../src/application/services/market-data/source-version/ListMarketDataSourceVersionsService';
 import { MarketDatasetKind, MarketAdapterKind, MarketPriceUnit, SourceEncoding } from '../../../../src/domain/contracts/MarketDataContracts';
 import { MarketSourceVersionInvalidError, MarketSourceVersionConflictError, MarketDataIntegrityError, MarketSourceVersionNotFoundError } from '../../../../src/domain/market-data/MarketDataErrors';
-import { SourceVersionUniqueCollisionError } from '../../../../src/infrastructure/repositories/market-data/PrismaMarketDataSourceRepository';
+import { MarketDataSourceVersionDomain } from '../../../../src/domain/market-data/MarketDataSourceVersion';
+import { SourceVersionUniqueCollisionError } from '../../../../src/application/ports/market-data/MarketDataSourcePorts';
 
 describe('Source Version Services', () => {
   let mockRepo: any;
@@ -56,8 +57,12 @@ describe('Source Version Services', () => {
     it('should handle REPLAYED outcome', async () => {
       const service = new RegisterMarketDataSourceVersionService(mockRepo, mockClock, 'FAM1');
       mockRepo.insert.mockRejectedValueOnce(new SourceVersionUniqueCollisionError());
+      const { hash } = MarketDataSourceVersionDomain.buildContractHash(validRequest);
+      const sourceKey = MarketDataSourceVersionDomain.buildSourceKey(hash);
       mockRepo.findBySourceKey.mockResolvedValueOnce({
-        ...validRequest
+        ...validRequest,
+        sourceKey,
+        contractHash: hash
       });
 
       const result = await service.execute(validRequest);
@@ -73,6 +78,24 @@ describe('Source Version Services', () => {
       });
 
       await expect(service.execute(validRequest)).rejects.toThrow(MarketSourceVersionConflictError);
+    });
+
+    it('should throw MarketDataIntegrityError if sourceKey is missing but contractHash exists', async () => {
+      const service = new RegisterMarketDataSourceVersionService(mockRepo, mockClock, 'FAM1');
+      mockRepo.insert.mockRejectedValueOnce(new SourceVersionUniqueCollisionError());
+      mockRepo.findBySourceKey.mockResolvedValueOnce(null);
+      mockRepo.findByContractHash.mockResolvedValueOnce({ id: 'some-id' });
+
+      await expect(service.execute(validRequest)).rejects.toThrow(MarketDataIntegrityError);
+    });
+
+    it('should throw MarketDataIntegrityError if sourceKey and contractHash are both missing', async () => {
+      const service = new RegisterMarketDataSourceVersionService(mockRepo, mockClock, 'FAM1');
+      mockRepo.insert.mockRejectedValueOnce(new SourceVersionUniqueCollisionError());
+      mockRepo.findBySourceKey.mockResolvedValueOnce(null);
+      mockRepo.findByContractHash.mockResolvedValueOnce(null);
+
+      await expect(service.execute(validRequest)).rejects.toThrow(MarketDataIntegrityError);
     });
   });
 

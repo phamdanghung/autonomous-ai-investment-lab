@@ -1,25 +1,37 @@
 import { Prisma } from '@prisma/client';
-import { TRADING_CALENDAR_TRANSACTION_TOKEN, TradingCalendarTransactionContext } from '../../../application/ports/market-data/TradingCalendarPorts';
+import { TradingCalendarTransactionContext } from '../../../application/ports/market-data/TradingCalendarPorts';
 
-export class PrismaTradingCalendarContext implements TradingCalendarTransactionContext {
-  public readonly [TRADING_CALENDAR_TRANSACTION_TOKEN] = true;
-  private active = true;
+type CalendarContextState = {
+  tx: Prisma.TransactionClient;
+  ownerToken: symbol;
+  active: boolean;
+};
 
-  constructor(
-    public readonly tx: Prisma.TransactionClient,
-    private readonly ownerToken: symbol
-  ) {}
+const contextMap = new WeakMap<TradingCalendarTransactionContext, CalendarContextState>();
 
-  validate(token: symbol) {
-    if (this.ownerToken !== token) {
-      throw new Error('Cross-family context detected.');
-    }
-    if (!this.active) {
-      throw new Error('Context is expired.');
-    }
+export function createTradingCalendarContext(tx: Prisma.TransactionClient, ownerToken: symbol): TradingCalendarTransactionContext {
+  const ctx = {} as TradingCalendarTransactionContext;
+  contextMap.set(ctx, { tx, ownerToken, active: true });
+  return ctx;
+}
+
+export function validateCalendarContext(ctx: TradingCalendarTransactionContext, ownerToken: symbol): Prisma.TransactionClient {
+  const state = contextMap.get(ctx);
+  if (!state) {
+    throw new Error('Invalid context: fake or incompatible context provided.');
   }
+  if (state.ownerToken !== ownerToken) {
+    throw new Error('Invalid context: cross-family context provided.');
+  }
+  if (!state.active) {
+    throw new Error('Transaction context has expired and cannot be used');
+  }
+  return state.tx;
+}
 
-  deactivate() {
-    this.active = false;
+export function deactivateCalendarContext(ctx: TradingCalendarTransactionContext): void {
+  const state = contextMap.get(ctx);
+  if (state) {
+    state.active = false;
   }
 }
