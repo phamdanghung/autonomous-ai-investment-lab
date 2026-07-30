@@ -17,19 +17,40 @@ describe('TradingCalendarPrismaMappers', () => {
     expect(dateStr).toBe('2023-01-15');
   });
 
-  it('should map record to domain', () => {
-    const record = {
+  describe('mapToDomain', () => {
+    const baseRecord = {
       id: '123',
       sourceVersionId: 'src1',
-      exchange: "HOSE",
+      exchange: 'HOSE',
       marketDate: new Date(Date.UTC(2023, 0, 15)),
-      dayType: "TRADING",
       reason: null,
       canonicalHash: 'hash',
     };
 
-    const domain = TradingCalendarPrismaMappers.mapToDomain(record);
-    expect(domain.marketDate).toBe('2023-01-15');
-    expect(domain.exchange).toBe("HOSE");
+    const types = ['TRADING_DAY', 'WEEKEND', 'HOLIDAY', 'SYSTEM_MAINTENANCE', 'OTHER'] as const;
+
+    for (const dayType of types) {
+      it(`should map ${dayType} correctly`, () => {
+        const record = { ...baseRecord, dayType };
+        const domain = TradingCalendarPrismaMappers.mapToDomain(record);
+        expect(domain.marketDate).toBe('2023-01-15');
+        expect(domain.exchange).toBe('HOSE');
+        expect(domain.dayType).toBe(dayType);
+      });
+    }
+
+    it('should throw MarketDataIntegrityError for forged invalid dayType', () => {
+      const record = { ...baseRecord, dayType: 'INVALID_FORGED_VALUE' };
+      let err: any;
+      try {
+        TradingCalendarPrismaMappers.mapToDomain(record);
+      } catch (e: any) {
+        err = e;
+      }
+      expect(err).toBeDefined();
+      expect(err.code).toBe('MARKET_DATA_INTEGRITY_ERROR');
+      expect(err.message).not.toContain('INVALID_FORGED_VALUE');
+      expect(err.message).toContain('Unexpected MarketDayType persistence value.');
+    });
   });
 });

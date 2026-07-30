@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { PrismaMarketDataSourceRepository } from '../../../src/infrastructure/repositories/market-data/PrismaMarketDataSourceRepository';
-import { SourceVersionUniqueCollisionError } from '../../../src/application/ports/market-data/MarketDataSourcePorts';
+import { SourceVersionUniqueCollisionError, IMarketDataSourceContext } from '../../../src/application/ports/market-data/MarketDataSourcePorts';
 import { MarketDatasetKind, MarketAdapterKind, MarketPriceUnit, SourceEncoding } from '../../../src/domain/contracts/MarketDataContracts';
 import { MarketDataConcurrencyConflictError, MarketDataDomainError, MarketDataIntegrityError } from '../../../src/domain/market-data/MarketDataErrors';
 
@@ -122,10 +122,15 @@ describe('PrismaMarketDataSourceRepository', () => {
       throw err;
     })).rejects.toThrow(err);
 
-    const domainErr = new MarketDataDomainError('TestDomain');
-    await expect(repo.transaction('TEST_FAM', async (ctx) => {
-      throw domainErr;
-    })).rejects.toThrow(domainErr);
+    const domainErr = new MarketDataIntegrityError('TestDomain');
+    try {
+      await repo.transaction('TEST_FAM', async (ctx) => {
+        throw domainErr;
+      });
+      throw new Error('Expected transaction to reject.');
+    } catch (caught) {
+      expect(caught).toBe(domainErr);
+    }
 
     try {
       await repo.transaction('TEST_FAM', async (ctx) => {
@@ -219,7 +224,7 @@ describe('PrismaMarketDataSourceRepository', () => {
   it('should throw on fake context', async () => {
     await expect(repo.findBySourceKey({} as any, 'test')).rejects.toThrow('Invalid context');
     await expect(repo.findBySourceKey(Object.create(null), 'test')).rejects.toThrow('Invalid context');
-    await expect(repo.findBySourceKey(new class {}(), 'test')).rejects.toThrow('Invalid context');
+    await expect(repo.findBySourceKey(new class {}() as unknown as IMarketDataSourceContext, 'test')).rejects.toThrow('Invalid context');
   });
 
   it('should reject context after commit deactivation', async () => {

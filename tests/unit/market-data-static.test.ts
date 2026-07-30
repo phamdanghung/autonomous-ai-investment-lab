@@ -111,7 +111,8 @@ describe('Market Data Phase 1B Static Verification', () => {
     const devMigrations = await prismaDev.$queryRawUnsafe<any[]>(`SELECT * FROM "_prisma_migrations" ORDER BY finished_at ASC`);
     await prismaDev.$disconnect();
 
-    expect(devMigrations.length).toBe(11);
+    expect(devMigrations.length).toBe(12);
+    expect(devMigrations.some(m => m.migration_name === '20260729215800_align_market_day_type')).toBe(true);
     expect(devMigrations.some(m => m.migration_name === '20260726234457_phase_1b_market_data_foundation')).toBe(true);
     expect(devMigrations.some(m => m.migration_name === '20260727142941_phase_1b_source_version_sealed_at_not_null')).toBe(true);
 
@@ -120,7 +121,8 @@ describe('Market Data Phase 1B Static Verification', () => {
       const testMigrations = await prismaTest.$queryRawUnsafe<any[]>(`SELECT * FROM "_prisma_migrations" ORDER BY finished_at ASC`);
       await prismaTest.$disconnect();
 
-      expect(testMigrations.length).toBe(11);
+      expect(testMigrations.length).toBe(12);
+      expect(testMigrations.some(m => m.migration_name === '20260729215800_align_market_day_type')).toBe(true);
       expect(testMigrations.some(m => m.migration_name === '20260726234457_phase_1b_market_data_foundation')).toBe(true);
       expect(testMigrations.some(m => m.migration_name === '20260727142941_phase_1b_source_version_sealed_at_not_null')).toBe(true);
     }

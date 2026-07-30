@@ -82,10 +82,10 @@ describe('Phase 1B Raw SQL Invariant Tests', () => {
       const id = getUuid();
       await prisma.$executeRawUnsafe(`
         INSERT INTO "TradingCalendarDay" ("id", "sourceVersionId", "exchange", "marketDate", "dayType", "canonicalHash", "createdAt")
-        VALUES ('${id}', '${svId}', 'HOSE', '2024-01-01', 'TRADING', '${getHash()}', '${ts}')
+        VALUES ('${id}', '${svId}', 'HOSE', '2024-01-01', 'TRADING_DAY', '${getHash()}', '${ts}')
       `);
       await expect(prisma.$executeRawUnsafe(`
-        UPDATE "TradingCalendarDay" SET "dayType" = 'CLOSED' WHERE "id" = '${id}'
+        UPDATE "TradingCalendarDay" SET "dayType" = 'HOLIDAY' WHERE "id" = '${id}'
       `)).rejects.toThrow();
     });
 
@@ -98,7 +98,7 @@ describe('Phase 1B Raw SQL Invariant Tests', () => {
       const id = getUuid();
       await prisma.$executeRawUnsafe(`
         INSERT INTO "TradingCalendarDay" ("id", "sourceVersionId", "exchange", "marketDate", "dayType", "canonicalHash", "createdAt")
-        VALUES ('${id}', '${svId}', 'HOSE', '2024-01-02', 'TRADING', '${getHash()}', '${ts}')
+        VALUES ('${id}', '${svId}', 'HOSE', '2024-01-02', 'TRADING_DAY', '${getHash()}', '${ts}')
       `);
       await expect(prisma.$executeRawUnsafe(`
         DELETE FROM "TradingCalendarDay" WHERE "id" = '${id}'

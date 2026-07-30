@@ -99,7 +99,7 @@ export class PrismaTradingCalendarRepository implements TradingCalendarRepositor
           sourceVersionId: record.sourceVersionId,
           exchange: record.exchange,
           marketDate: TradingCalendarPrismaMappers.mapDateToPrisma(record.marketDate),
-          dayType: record.dayType as any,
+          dayType: record.dayType,
           reason: record.reason,
           canonicalHash: record.canonicalHash,
         }

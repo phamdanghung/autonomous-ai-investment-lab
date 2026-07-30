@@ -1,5 +1,7 @@
 import { TradingCalendarDay } from '../../domain/market-data/TradingCalendarDay';
 import { MarketExchange, MarketDayType } from '../../domain/contracts/MarketDataContracts';
+import { MarketDataIntegrityError } from '../../domain/market-data/MarketDataErrors';
+import { MarketDayType as PrismaMarketDayType } from '@prisma/client';
 
 export class TradingCalendarPrismaMappers {
   static mapDateToPrisma(marketDate: string): Date {
@@ -14,13 +16,30 @@ export class TradingCalendarPrismaMappers {
     return `${y}-${m}-${d}`;
   }
 
+  static toDomainMarketDayType(value: PrismaMarketDayType): MarketDayType {
+    switch (value) {
+      case 'TRADING_DAY':
+        return 'TRADING_DAY';
+      case 'WEEKEND':
+        return 'WEEKEND';
+      case 'HOLIDAY':
+        return 'HOLIDAY';
+      case 'SYSTEM_MAINTENANCE':
+        return 'SYSTEM_MAINTENANCE';
+      case 'OTHER':
+        return 'OTHER';
+      default:
+        throw new MarketDataIntegrityError(`Unexpected MarketDayType persistence value.`);
+    }
+  }
+
   static mapToDomain(record: any): TradingCalendarDay {
     return {
       id: record.id,
       sourceVersionId: record.sourceVersionId,
       exchange: record.exchange as MarketExchange,
       marketDate: this.mapDateFromPrisma(record.marketDate),
-      dayType: record.dayType as MarketDayType,
+      dayType: this.toDomainMarketDayType(record.dayType),
       reason: record.reason,
       canonicalHash: record.canonicalHash,
     };
