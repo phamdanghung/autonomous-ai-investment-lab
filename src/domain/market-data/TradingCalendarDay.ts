@@ -18,7 +18,7 @@ export type CanonicalTradingCalendarPayload = {
   sourceVersionKey: string; // The natural key of the source version, NOT the UUID
   exchange: MarketExchange;
   marketDate: string;
-  dayType: string;
+  dayType: MarketDayType;
   reason: string | null;
 };
 

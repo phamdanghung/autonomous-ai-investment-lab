@@ -11,7 +11,6 @@ import {
   TradingCalendarConflictError,
   MarketDataIntegrityError
 } from '../../../../domain/market-data/MarketDataErrors';
-import { MarketDayType } from '../../../../domain/contracts/MarketDataContracts';
 
 export class RegisterTradingCalendarDayService {
   constructor(private readonly repository: TradingCalendarRepository) {}
@@ -45,7 +44,7 @@ export class RegisterTradingCalendarDayService {
           sourceVersionId,
           exchange: payload.exchange,
           marketDate: payload.marketDate,
-          dayType: payload.dayType as MarketDayType,
+          dayType: payload.dayType,
           reason: payload.reason,
           canonicalHash: hash,
         });

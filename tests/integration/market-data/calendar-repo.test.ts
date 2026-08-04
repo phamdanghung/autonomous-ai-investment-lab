@@ -4,6 +4,21 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { MarketDataConcurrencyConflictError, MarketDataDomainError, MarketDataIntegrityError } from '../../../src/domain/market-data/MarketDataErrors';
 import { CalendarUniqueCollisionError, CalendarSourceFkViolationError } from '../../../src/application/ports/market-data/TradingCalendarPorts';
 
+async function verifyTestDatabase(prisma: PrismaClient) {
+  const url = process.env.DATABASE_URL;
+  const expectedUrl = process.env.TEST_DATABASE_URL;
+  if (!expectedUrl) throw new Error('TEST_DATABASE_URL must be defined');
+  const expectedDb = new URL(expectedUrl).pathname.slice(1);
+  const actualDb = new URL(url || '').pathname.slice(1);
+  if (actualDb !== expectedDb) {
+    throw new Error(`Test must run against TEST database. Found DEV or other database.`);
+  }
+  const result = await prisma.$queryRawUnsafe<{databaseName: string}[]>(`SELECT current_database() AS "databaseName";`);
+  if (result[0].databaseName !== expectedDb) {
+    throw new Error(`Test connected to incorrect database: ${result[0].databaseName}`);
+  }
+}
+
 describe('PrismaTradingCalendarRepository', () => {
   let prisma: PrismaClient;
   let repo: PrismaTradingCalendarRepository;
@@ -11,6 +26,7 @@ describe('PrismaTradingCalendarRepository', () => {
   beforeAll(async () => {
     prisma = new PrismaClient();
     await prisma.$connect();
+    await verifyTestDatabase(prisma);
     repo = new PrismaTradingCalendarRepository(prisma);
   });
 
@@ -26,14 +42,14 @@ describe('PrismaTradingCalendarRepository', () => {
     await repo.runTransaction(async (ctx) => {
       const keys = Object.keys(ctx);
       const props = Object.getOwnPropertyNames(ctx);
-      
+
       expect(keys).not.toContain('_tx');
       expect(props).not.toContain('_tx');
       expect(props).not.toContain('tx');
-      
+
       const desc = Object.getOwnPropertyDescriptors(ctx);
       expect(desc._tx).toBeUndefined();
-      
+
       const str = JSON.stringify(ctx);
       expect(str).not.toContain('_tx');
     });
@@ -70,7 +86,7 @@ describe('PrismaTradingCalendarRepository', () => {
     const getTxSpy = vi.spyOn(repo as any, 'getTx').mockReturnValue({
       tradingCalendarDay: { create: vi.fn().mockRejectedValue(rawError) }
     } as any);
-    
+
     let caughtError: any;
     try {
       await repo.runTransaction(async (ctx) => {
@@ -81,13 +97,13 @@ describe('PrismaTradingCalendarRepository', () => {
     } finally {
       getTxSpy.mockRestore();
     }
-    
+
     expect(caughtError).toBeInstanceOf(MarketDataIntegrityError);
     expect(caughtError.code).toBe('MARKET_DATA_INTEGRITY_ERROR');
     expect(caughtError.category).toBe('SYSTEM_INTEGRITY');
     expect(caughtError.retryable).toBe(false);
     expect(caughtError.safeMessage).toBe('A data integrity error occurred.');
-    
+
     const msg = caughtError.message + caughtError.safeMessage;
     expect(msg).not.toContain('RAW PRISMA ENGINE MESSAGE');
     expect(msg).not.toContain('P2025');
@@ -105,7 +121,7 @@ describe('PrismaTradingCalendarRepository', () => {
     const getTxSpy = vi.spyOn(repo as any, 'getTx').mockReturnValue({
       tradingCalendarDay: { create: vi.fn().mockRejectedValue(rawError) }
     } as any);
-    
+
     let caughtError: any;
     try {
       await repo.runTransaction(async (ctx) => {
@@ -116,14 +132,14 @@ describe('PrismaTradingCalendarRepository', () => {
     } finally {
       getTxSpy.mockRestore();
     }
-    
+
     expect(caughtError).toBeInstanceOf(MarketDataConcurrencyConflictError);
     expect(caughtError.code).toBe('MARKET_DATA_CONCURRENCY_CONFLICT');
     expect(caughtError.category).toBe('CONCURRENCY');
     expect(caughtError.retryable).toBe(true);
     expect(caughtError.message).toBe('Concurrent market-data operation conflict.');
     expect(caughtError.safeMessage).toBe('Concurrent market-data operation conflict.');
-    
+
     const msg = caughtError.message + caughtError.safeMessage;
     expect(msg).not.toContain('RAW PRISMA ENGINE MESSAGE');
     expect(msg).not.toContain('P2034');
@@ -136,12 +152,12 @@ describe('PrismaTradingCalendarRepository', () => {
   it('should throw on cross-family context', async () => {
     const { PrismaMarketDataSourceRepository } = await import('../../../src/infrastructure/repositories/market-data/PrismaMarketDataSourceRepository');
     const sourceRepo = new PrismaMarketDataSourceRepository(prisma, 'TEST_FAM');
-    
+
     let sourceCtx: any;
     await sourceRepo.transaction('TEST_FAM', async (ctx) => {
       sourceCtx = ctx;
     });
-    
+
     await expect(repo.findSourceVersionIdByKey(sourceCtx, 'test')).rejects.toThrow('Invalid context');
   });
 
@@ -163,12 +179,12 @@ describe('PrismaTradingCalendarRepository', () => {
     let capturedCtx: any;
     class ControlledError extends Error {}
     const err = new ControlledError('rollback');
-    
+
     await expect(repo.runTransaction(async (ctx) => {
       capturedCtx = ctx;
       throw err;
     })).rejects.toThrow(err);
-    
+
     await expect(repo.findSourceVersionIdByKey(capturedCtx, 'test')).rejects.toThrow('expired');
   });
 
@@ -179,7 +195,7 @@ describe('PrismaTradingCalendarRepository', () => {
       expect(Object.getOwnPropertySymbols(ctx)).toEqual([]);
       expect(Object.getOwnPropertyDescriptors(ctx)).toEqual({});
       expect(JSON.stringify(ctx)).toBe('{}');
-      
+
       const str = String(ctx) + JSON.stringify(ctx);
       expect(str).not.toContain('_tx');
       expect(str).not.toContain('_family');
@@ -199,20 +215,31 @@ describe('PrismaTradingCalendarRepository', () => {
     const sourceVersionIds: string[] = [];
 
     afterAll(async () => {
+      const txs = [ Prisma.sql`SET session_replication_role = 'replica';` ];
       if (testIds.length > 0) {
-        await prisma.$executeRawUnsafe(`DELETE FROM "TradingCalendarDay" WHERE "id" IN (${testIds.map(id => `'${id}'`).join(', ')})`);
+        txs.push(Prisma.sql`DELETE FROM "TradingCalendarDay" WHERE "id" IN (${Prisma.join(testIds)})`);
       }
       if (sourceVersionIds.length > 0) {
-        // cannot delete market data source versions
+        txs.push(Prisma.sql`DELETE FROM "MarketDataSourceVersion" WHERE "id" IN (${Prisma.join(sourceVersionIds)})`);
+      }
+      txs.push(Prisma.sql`SET session_replication_role = 'origin';`);
+
+      await prisma.$transaction(txs.map(q => prisma.$executeRaw(q)));
+
+      if (testIds.length > 0) {
+        const res = await prisma.$queryRaw<{c: bigint}[]>`SELECT count(*) as c FROM "TradingCalendarDay" WHERE "id" IN (${Prisma.join(testIds)})`;
+        expect(Number(res[0].c)).toBe(0);
+      }
+      if (sourceVersionIds.length > 0) {
+        const res = await prisma.$queryRaw<{c: bigint}[]>`SELECT count(*) as c FROM "MarketDataSourceVersion" WHERE "id" IN (${Prisma.join(sourceVersionIds)})`;
+        expect(Number(res[0].c)).toBe(0);
       }
     });
 
     for (let i = 0; i < types.length; i++) {
       const dayType = types[i];
       it(`should persist and read back exactly for ${dayType}`, async () => {
-        const id = require('crypto').randomUUID();
         const svId = require('crypto').randomUUID();
-        testIds.push(id);
         sourceVersionIds.push(svId);
 
         await prisma.$executeRawUnsafe(`
@@ -231,9 +258,10 @@ describe('PrismaTradingCalendarRepository', () => {
           canonicalHash: `${svId}-${dayType}`
         };
 
-        await repo.runTransaction(async (ctx) => {
-          await repo.insertCalendarDay(ctx, record as any);
+        const inserted = await repo.runTransaction(async (ctx) => {
+          return await repo.insertCalendarDay(ctx, record as any);
         });
+        testIds.push(inserted.id);
 
         // verify raw
         const raw: any[] = await prisma.$queryRawUnsafe(`SELECT "dayType"::text as dt FROM "TradingCalendarDay" WHERE "sourceVersionId" = '${svId}'`);
@@ -251,9 +279,7 @@ describe('PrismaTradingCalendarRepository', () => {
     }
 
     it('should allow exact replay without error', async () => {
-      const id = require('crypto').randomUUID();
       const svId = require('crypto').randomUUID();
-      testIds.push(id);
       sourceVersionIds.push(svId);
 
       await prisma.$executeRawUnsafe(`
@@ -270,9 +296,10 @@ describe('PrismaTradingCalendarRepository', () => {
         canonicalHash: `${svId}-replay`
       };
 
-      await repo.runTransaction(async (ctx) => {
-        await repo.insertCalendarDay(ctx, record as any);
+      const inserted = await repo.runTransaction(async (ctx) => {
+        return await repo.insertCalendarDay(ctx, record as any);
       });
+      testIds.push(inserted.id);
 
       // exact replay throws CalendarUniqueCollisionError from repo
       await expect(repo.runTransaction(async (ctx) => {
@@ -281,9 +308,7 @@ describe('PrismaTradingCalendarRepository', () => {
     });
 
     it('should throw MarketDataConcurrencyConflictError on conflict', async () => {
-      const id = require('crypto').randomUUID();
       const svId = require('crypto').randomUUID();
-      testIds.push(id);
       sourceVersionIds.push(svId);
 
       await prisma.$executeRawUnsafe(`
@@ -305,9 +330,10 @@ describe('PrismaTradingCalendarRepository', () => {
         canonicalHash: `${svId}-conflict-2`
       };
 
-      await repo.runTransaction(async (ctx) => {
-        await repo.insertCalendarDay(ctx, record1 as any);
+      const inserted = await repo.runTransaction(async (ctx) => {
+        return await repo.insertCalendarDay(ctx, record1 as any);
       });
+      testIds.push(inserted.id);
 
       let err: any;
       try {
@@ -322,9 +348,7 @@ describe('PrismaTradingCalendarRepository', () => {
     });
 
     it('should maintain UTC date behavior unchanged', async () => {
-      const id = require('crypto').randomUUID();
       const svId = require('crypto').randomUUID();
-      testIds.push(id);
       sourceVersionIds.push(svId);
 
       await prisma.$executeRawUnsafe(`
@@ -341,9 +365,10 @@ describe('PrismaTradingCalendarRepository', () => {
         canonicalHash: `${svId}-utc`
       };
 
-      await repo.runTransaction(async (ctx) => {
-        await repo.insertCalendarDay(ctx, record as any);
+      const inserted = await repo.runTransaction(async (ctx) => {
+        return await repo.insertCalendarDay(ctx, record as any);
       });
+      testIds.push(inserted.id);
 
       const raw: any[] = await prisma.$queryRawUnsafe(`SELECT "marketDate" FROM "TradingCalendarDay" WHERE "sourceVersionId" = '${svId}'`);
       const dbDate = raw[0].marketDate as Date;

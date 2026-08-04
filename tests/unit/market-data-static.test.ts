@@ -9,6 +9,9 @@ describe('Market Data Phase 1B Static Verification', () => {
   const contractsContent = fs.readFileSync(contractsPath, 'utf8');
   const migrationContent = fs.readFileSync(migrationPath, 'utf8');
 
+  const alignDayTypeMigrationPath = path.resolve(__dirname, '../../prisma/migrations/20260729215800_align_market_day_type/migration.sql');
+  const alignDayTypeMigrationContent = fs.readFileSync(alignDayTypeMigrationPath, 'utf8');
+
   it('1. Domain không import Prisma', () => {
     expect(contractsContent).not.toMatch(/@prisma\/client/);
   });
@@ -101,7 +104,31 @@ describe('Market Data Phase 1B Static Verification', () => {
     expect(migrationContent).toContain(`"qualityDecision" = 'QUARANTINED'`);
   });
 
-  it('15-18. DB Migration checks', async () => {
+  it('15. Align market day type enum migration rules', () => {
+    const enumMatch = alignDayTypeMigrationContent.match(/CREATE TYPE "MarketDayType_new" AS ENUM \(([^)]+)\);/);
+    expect(enumMatch).not.toBeNull();
+    const parsedMembers = enumMatch![1].split(',').map(s => s.trim().replace(/'/g, '').replace(/\n/g, ''));
+    expect(parsedMembers).toEqual([
+      'TRADING_DAY',
+      'WEEKEND',
+      'HOLIDAY',
+      'SYSTEM_MAINTENANCE',
+      'OTHER'
+    ]);
+    expect(parsedMembers).not.toContain('TRADING');
+    expect(parsedMembers).not.toContain('CLOSED');
+    expect(parsedMembers).not.toContain('SPECIAL');
+
+    expect(alignDayTypeMigrationContent).toMatch(/IF EXISTS \([\s\S]*?'CLOSED', 'SPECIAL'[\s\S]*?\) THEN/);
+    expect(alignDayTypeMigrationContent).toContain(`RAISE EXCEPTION`);
+    expect(alignDayTypeMigrationContent).toContain(`'Ambiguous legacy MarketDayType values exist; migration aborted.';`);
+
+    expect(alignDayTypeMigrationContent).toContain(`WHEN 'TRADING' THEN 'TRADING_DAY'`);
+    expect(alignDayTypeMigrationContent).toContain(`DROP TYPE "MarketDayType";`);
+    expect(alignDayTypeMigrationContent).toContain(`RENAME TO "MarketDayType";`);
+  });
+
+  it('16-19. DB Migration checks', async () => {
     // 15. Phase 1B ledger row count DEV bằng 0.
     // 16. Phase 1B ledger row count TEST bằng 0.
     // 17. Migration vẫn pending.

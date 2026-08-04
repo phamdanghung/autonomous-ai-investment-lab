@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 
@@ -10,11 +10,34 @@ describe('Phase 1B Raw SQL Invariant Tests', () => {
     prisma = new PrismaClient({ datasourceUrl: process.env.TEST_DATABASE_URL });
   });
 
+  const _allIds = new Set<string>();
+
   afterAll(async () => {
+    const ids = Array.from(_allIds);
+    if (ids.length > 0) {
+      const txs = [ Prisma.sql`SET session_replication_role = 'replica';` ];
+      txs.push(Prisma.sql`DELETE FROM "DatasetSnapshotEntry" WHERE "id" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`DELETE FROM "DatasetSnapshot" WHERE "id" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`DELETE FROM "DailyMarketBar" WHERE "id" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`DELETE FROM "MarketDataImportBatch" WHERE "id" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`DELETE FROM "TradingCalendarDay" WHERE "id" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`DELETE FROM "MarketInstrument" WHERE "id" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`DELETE FROM "MarketDataSourceVersion" WHERE "id" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`DELETE FROM "MarketDataSourceVersion" WHERE "sourceKey" IN (${Prisma.join(ids)})`);
+      txs.push(Prisma.sql`SET session_replication_role = 'origin';`);
+
+      await prisma.$transaction(txs.map(q => prisma.$executeRaw(q)));
+
+      const tables = ['DatasetSnapshotEntry', 'DatasetSnapshot', 'DailyMarketBar', 'MarketDataImportBatch', 'TradingCalendarDay', 'MarketInstrument', 'MarketDataSourceVersion'];
+      for (const t of tables) {
+        const res = await prisma.$queryRawUnsafe<{c: bigint}[]>(`SELECT count(*) as c FROM "${t}" WHERE "id" IN (${ids.map(id => `'${id}'`).join(',')})`);
+        expect(Number(res[0].c)).toBe(0);
+      }
+    }
     await prisma.$disconnect();
   });
 
-  const getUuid = () => uuidv4();
+  const getUuid = () => { const id = uuidv4(); _allIds.add(id); return id; };
   const getHash = () => crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
   const ts = new Date().toISOString();
 
