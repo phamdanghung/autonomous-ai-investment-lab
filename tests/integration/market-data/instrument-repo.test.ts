@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { createPrismaMarketInstrumentAdapters, PrismaTransactionContext } from '../../../src/infrastructure/repositories/market-data/PrismaMarketInstrumentRepository';
 import { IMarketInstrumentTransactionPort } from '../../../src/application/ports/market-data/IMarketInstrumentTransactionPort';
 import { IMarketInstrumentQueryRepository } from '../../../src/application/ports/market-data/IMarketInstrumentQueryRepository';
@@ -10,6 +10,18 @@ import { ListMarketInstrumentsService } from '../../../src/application/services/
 import { GetMarketInstrumentService } from '../../../src/application/services/market-data/GetMarketInstrumentService';
 import { MarketInstrumentOverlapError, MarketInstrumentNotFoundError, MarketInstrumentAlreadyClosedError, MarketInstrumentInvalidError, MarketDataIntegrityError, MarketDataConcurrencyConflictError } from '../../../src/domain/market-data/MarketDataErrors';
 import { MarketInstrumentDomain } from '../../../src/domain/market-data/MarketInstrument';
+
+
+async function verifyTestDatabase(prisma: PrismaClient) {
+  const url = process.env.DATABASE_URL;
+  const expectedUrl = process.env.TEST_DATABASE_URL;
+  if (!expectedUrl) throw new Error('TEST_DATABASE_URL must be defined');
+  const expectedDb = new URL(expectedUrl).pathname.slice(1);
+  const actualDb = new URL(url || '').pathname.slice(1);
+  if (actualDb !== expectedDb) {
+    throw new Error('Test must run against TEST database. Found DEV or other database.');
+  }
+}
 
 describe('MarketInstrument Integration Tests', () => {
   let prisma: PrismaClient;
@@ -22,8 +34,13 @@ describe('MarketInstrument Integration Tests', () => {
   let getService: GetMarketInstrumentService;
   let listService: ListMarketInstrumentsService;
 
+  const createdInstrumentIds = new Set<string>();
+  const createdSourceVersionIds = new Set<string>();
+
   beforeAll(async () => {
     prisma = new PrismaClient();
+    await prisma.$connect();
+    await verifyTestDatabase(prisma);
 
     const adapters = createPrismaMarketInstrumentAdapters(prisma);
     txRunner = adapters.transactionRunner;
@@ -37,6 +54,26 @@ describe('MarketInstrument Integration Tests', () => {
   });
 
   afterAll(async () => {
+    const txs = [ Prisma.sql`SET session_replication_role = 'replica';` ];
+    
+    if (createdInstrumentIds.size > 0) {
+      txs.push(Prisma.sql`DELETE FROM "MarketInstrument" WHERE "id" IN (${Prisma.join(Array.from(createdInstrumentIds))})`);
+    }
+    if (createdSourceVersionIds.size > 0) {
+      txs.push(Prisma.sql`DELETE FROM "MarketDataSourceVersion" WHERE "id" IN (${Prisma.join(Array.from(createdSourceVersionIds))})`);
+    }
+    txs.push(Prisma.sql`SET session_replication_role = 'origin';`);
+
+    await prisma.$transaction(txs.map(q => prisma.$executeRaw(q)));
+
+    if (createdInstrumentIds.size > 0) {
+      const res = await prisma.$queryRaw<{c: bigint}[]>`SELECT count(*) as c FROM "MarketInstrument" WHERE "id" IN (${Prisma.join(Array.from(createdInstrumentIds))})`;
+      expect(Number(res[0].c)).toBe(0);
+    }
+
+    createdInstrumentIds.clear();
+    createdSourceVersionIds.clear();
+
     await prisma.$disconnect();
   });
 
@@ -50,6 +87,7 @@ describe('MarketInstrument Integration Tests', () => {
       securityType: 'EQUITY',
       effectiveFrom: '2023-01-01'
     });
+    createdInstrumentIds.add(res.instrument.id);
 
     expect(res.outcome).toBe('CREATED');
     expect(res.instrument.effectiveTo).toBeNull();
@@ -69,22 +107,25 @@ describe('MarketInstrument Integration Tests', () => {
     };
 
     const first = await registerService.execute(payload);
+    createdInstrumentIds.add(first.instrument.id);
     expect(first.outcome).toBe('CREATED');
 
     const second = await registerService.execute(payload);
+    createdInstrumentIds.add(second.instrument.id);
     expect(second.outcome).toBe('REPLAYED');
     expect(second.instrument.id).toBe(first.instrument.id);
   });
 
   it('3. Duplicate business key with conflicting payload rejects', async () => {
     const symbol = getTestSymbol();
-    await registerService.execute({
+    const _tmp = await registerService.execute({
       exchange: 'HOSE',
       canonicalSymbol: symbol,
       securityType: 'EQUITY',
       effectiveFrom: '2023-01-01',
       effectiveTo: '2023-12-31'
     });
+    createdInstrumentIds.add(_tmp.instrument.id);
 
     await expect(registerService.execute({
       exchange: 'HOSE',
@@ -97,13 +138,14 @@ describe('MarketInstrument Integration Tests', () => {
 
   it('4. Open-ended overlap rejects', async () => {
     const symbol = getTestSymbol();
-    await registerService.execute({
+    const _tmp = await registerService.execute({
       exchange: 'HOSE',
       canonicalSymbol: symbol,
       securityType: 'EQUITY',
       effectiveFrom: '2023-01-01',
       effectiveTo: null
     });
+    createdInstrumentIds.add(_tmp.instrument.id);
 
     await expect(registerService.execute({
       exchange: 'HOSE',
@@ -116,13 +158,14 @@ describe('MarketInstrument Integration Tests', () => {
 
   it('5. Historical non-overlap succeeds', async () => {
     const symbol = getTestSymbol();
-    await registerService.execute({
+    const _tmp = await registerService.execute({
       exchange: 'HOSE',
       canonicalSymbol: symbol,
       securityType: 'EQUITY',
       effectiveFrom: '2023-01-01',
       effectiveTo: '2023-05-31'
     });
+    createdInstrumentIds.add(_tmp.instrument.id);
 
     const res = await registerService.execute({
       exchange: 'HOSE',
@@ -131,19 +174,21 @@ describe('MarketInstrument Integration Tests', () => {
       effectiveFrom: '2023-06-01',
       effectiveTo: null
     });
+    createdInstrumentIds.add(res.instrument.id);
 
     expect(res.outcome).toBe('CREATED');
   });
 
   it('6. Boundary-touch overlap rejects', async () => {
     const symbol = getTestSymbol();
-    await registerService.execute({
+    const _tmp = await registerService.execute({
       exchange: 'HOSE',
       canonicalSymbol: symbol,
       securityType: 'EQUITY',
       effectiveFrom: '2023-01-01',
       effectiveTo: '2023-06-01' // Inclusive boundary
     });
+    createdInstrumentIds.add(_tmp.instrument.id);
 
     await expect(registerService.execute({
       exchange: 'HOSE',
@@ -162,6 +207,7 @@ describe('MarketInstrument Integration Tests', () => {
       securityType: 'EQUITY',
       effectiveFrom: '2023-01-01'
     });
+    createdInstrumentIds.add(res.instrument.id);
 
     const closed = await closeService.execute({
       businessKey: res.instrument.businessKey,
@@ -181,6 +227,7 @@ describe('MarketInstrument Integration Tests', () => {
       securityType: 'EQUITY',
       effectiveFrom: '2023-01-01'
     });
+    createdInstrumentIds.add(res.instrument.id);
 
     await closeService.execute({
       businessKey: res.instrument.businessKey,
@@ -201,6 +248,7 @@ describe('MarketInstrument Integration Tests', () => {
       securityType: 'EQUITY',
       effectiveFrom: '2023-05-01'
     });
+    createdInstrumentIds.add(res.instrument.id);
 
     await expect(closeService.execute({
       businessKey: res.instrument.businessKey,
@@ -218,6 +266,7 @@ describe('MarketInstrument Integration Tests', () => {
       securityType: 'EQUITY',
       effectiveFrom: '2023-05-01'
     });
+    createdInstrumentIds.add(res.instrument.id);
 
     await expect(prisma.$executeRaw`
       UPDATE "MarketInstrument" SET "exchange" = 'HNX' WHERE id = ${res.instrument.id}
@@ -232,6 +281,7 @@ describe('MarketInstrument Integration Tests', () => {
       securityType: 'EQUITY',
       effectiveFrom: '2023-05-05'
     });
+    createdInstrumentIds.add(res.instrument.id);
 
     // Check application DTO returns string YYYY-MM-DD
     expect(res.instrument.effectiveFrom).toBe('2023-05-05');
@@ -241,13 +291,14 @@ describe('MarketInstrument Integration Tests', () => {
     const symbol = getTestSymbol();
     // Insert 5 episodes for the same symbol
     for (let i = 1; i <= 5; i++) {
-      await registerService.execute({
+      const _tmp = await registerService.execute({
         exchange: 'HOSE',
         canonicalSymbol: symbol,
         securityType: 'EQUITY',
         effectiveFrom: `2020-0${i}-01`,
         effectiveTo: `2020-0${i}-15`
       });
+    createdInstrumentIds.add(_tmp.instrument.id);
     }
 
     // List with limit 2
