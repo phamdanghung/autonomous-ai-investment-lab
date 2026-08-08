@@ -4,13 +4,15 @@ import { PrismaMarketDataSourceRepository } from '../../../src/infrastructure/re
 import { SourceVersionUniqueCollisionError, IMarketDataSourceContext } from '../../../src/application/ports/market-data/MarketDataSourcePorts';
 import { MarketDatasetKind, MarketAdapterKind, MarketPriceUnit, SourceEncoding } from '../../../src/domain/contracts/MarketDataContracts';
 import { MarketDataConcurrencyConflictError, MarketDataDomainError, MarketDataIntegrityError } from '../../../src/domain/market-data/MarketDataErrors';
-
+import { setupIsolatedTestSchema, IsolatedTestSchema } from '../../utils/database';
 describe('PrismaMarketDataSourceRepository', () => {
   let prisma: PrismaClient;
   let repo: PrismaMarketDataSourceRepository;
+  let isolatedSchema: IsolatedTestSchema;
 
   beforeAll(async () => {
-    prisma = new PrismaClient();
+    isolatedSchema = await setupIsolatedTestSchema('source-version-repo');
+    prisma = new PrismaClient({ datasourceUrl: isolatedSchema.databaseUrl });
     await prisma.$connect();
     repo = new PrismaMarketDataSourceRepository(prisma, 'TEST_FAM');
     
@@ -18,6 +20,9 @@ describe('PrismaMarketDataSourceRepository', () => {
 
   afterAll(async () => {
     await prisma.$disconnect();
+    if (isolatedSchema) {
+      await isolatedSchema.teardown();
+    }
   });
 
   it('should insert and list', async () => {

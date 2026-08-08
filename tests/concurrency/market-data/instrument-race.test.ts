@@ -8,7 +8,7 @@ import { RegisterMarketInstrumentService } from '../../../src/application/servic
 import { CloseMarketInstrumentListingService } from '../../../src/application/services/market-data/CloseMarketInstrumentListingService';
 import { MarketDataCanonicalization } from '../../../src/domain/market-data/MarketDataCanonicalization';
 import { MarketInstrumentOverlapError, MarketInstrumentAlreadyClosedError } from '../../../src/domain/market-data/MarketDataErrors';
-
+import { setupIsolatedTestSchema, IsolatedTestSchema } from '../../utils/database';
 describe('MarketInstrument Real Concurrency Tests', () => {
   let prismaA: PrismaClient;
   let prismaB: PrismaClient;
@@ -20,10 +20,13 @@ describe('MarketInstrument Real Concurrency Tests', () => {
   let registerService: RegisterMarketInstrumentService;
   let closeService: CloseMarketInstrumentListingService;
 
+  let isolatedSchema: IsolatedTestSchema;
+
   beforeAll(async () => {
-    prismaA = new PrismaClient();
-    prismaB = new PrismaClient();
-    prismaObserver = new PrismaClient();
+    isolatedSchema = await setupIsolatedTestSchema('instrument-race');
+    prismaA = new PrismaClient({ datasourceUrl: isolatedSchema.databaseUrl });
+    prismaB = new PrismaClient({ datasourceUrl: isolatedSchema.databaseUrl });
+    prismaObserver = new PrismaClient({ datasourceUrl: isolatedSchema.databaseUrl });
 
     const adapters = createPrismaMarketInstrumentAdapters(prismaA);
     txRunner = adapters.transactionRunner;
@@ -38,6 +41,9 @@ describe('MarketInstrument Real Concurrency Tests', () => {
     await prismaA.$disconnect();
     await prismaB.$disconnect();
     await prismaObserver.$disconnect();
+    if (isolatedSchema) {
+      await isolatedSchema.teardown();
+    }
   });
 
   const getTestSymbol = () => `TSRC${Math.random().toString(36).substring(7).toUpperCase()}`;
@@ -401,7 +407,7 @@ describe('MarketInstrument Real Concurrency Tests', () => {
       const registerAppName = `task_1b2b_register_${testId}`;
       
       const buildTestUrl = (appName: string) => {
-        const url = process.env.DATABASE_URL || 'postgresql://postgres:123456789@localhost:5432/autonomous_ai_lab_test?schema=public';
+        const url = isolatedSchema.databaseUrl || 'postgresql://postgres:123456789@localhost:5432/autonomous_ai_lab_test?schema=public';
         const sep = url.includes('?') ? '&' : '?';
         return `${url}${sep}application_name=${appName}&connection_limit=1`;
       };
