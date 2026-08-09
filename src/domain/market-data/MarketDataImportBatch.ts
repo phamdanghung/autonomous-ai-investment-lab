@@ -16,7 +16,6 @@ export interface MarketDataImportBatch {
   acceptedRowCount: number;
   flaggedRowCount: number;
   quarantinedRowCount: number;
-  version: number;
 }
 
 export type ExistingImportIdentity = {
