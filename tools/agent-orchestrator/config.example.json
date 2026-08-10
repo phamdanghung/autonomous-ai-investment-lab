@@ -1,0 +1,9 @@
+{
+  "repository": "phamdanghung/autonomous-ai-investment-lab",
+  "issue_number": 0,
+  "allowed_github_user_id": 0,
+  "poll_interval_seconds": 30,
+  "allowed_phase": "PLAN_ONLY",
+  "allowed_scope": "READ_ONLY",
+  "allowed_branch": "agent/task-1b2d-import-batch"
+}
