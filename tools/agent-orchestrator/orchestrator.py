@@ -137,7 +137,9 @@ def get_policies():
         "list_directory", 
         "search_directory"
     ]
-    return [policy.deny(name, when=_is_sensitive_args) for name in names]
+    policies = [policy.deny(name, when=_is_sensitive_args) for name in names]
+    policies.append(policy.allow("*"))
+    return policies
 
 def _get_arg(args, key):
     try:
