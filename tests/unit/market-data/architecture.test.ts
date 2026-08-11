@@ -37,11 +37,12 @@ describe('MarketDataArchitecture', () => {
       scannedCount++;
     }
 
-    // Exact count expectation (8 domain files currently including Types, Validation, etc.)
+    // Exact count expectation (9 domain files currently including Types, Validation, etc.)
     expect(scannedCount).toBe(allFiles.length);
     // Explicit list
     const fileBasenames = allFiles.map(f => path.basename(f)).sort();
     expect(fileBasenames).toEqual([
+      'DailyMarketBar.ts',
       'MarketDataCanonicalization.ts',
       'MarketDataErrors.ts',
       'MarketDataImportBatch.ts',

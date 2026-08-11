@@ -20,7 +20,8 @@ describe('MarketDataErrors', () => {
       'MARKET_IMPORT_INVALID_TRANSITION',
       'MARKET_IMPORT_NOT_FOUND',
       'MARKET_DATA_CONCURRENCY_CONFLICT',
-      'MARKET_DATA_INTEGRITY_ERROR'
+      'MARKET_DATA_INTEGRITY_ERROR',
+      'DAILY_MARKET_BAR_INVALID'
     ].sort();
 
     const actualCodes: string[] = [];
@@ -53,7 +54,7 @@ describe('MarketDataErrors', () => {
 
     actualCodes.sort();
     expect(actualCodes).toEqual(expectedCodes);
-    expect(actualCodes.length).toBe(17);
+    expect(actualCodes.length).toBe(18);
 
     // Verify all categories belong to the expected type subset
     const expectedCategories = ['VALIDATION', 'CONFLICT', 'NOT_FOUND', 'BUSINESS_RULE', 'SYSTEM_INTEGRITY', 'CONCURRENCY'];

@@ -21,6 +21,14 @@ export class MarketDataDomainError extends DomainError {
   }
 }
 
+// ----------------- DAILY MARKET BAR ERRORS -----------------
+export class DailyMarketBarInvalidError extends MarketDataDomainError {
+  constructor(message: string = 'Daily market bar contains invalid data.') {
+    super(message, 'DAILY_MARKET_BAR_INVALID', 'The provided daily market bar is invalid.', 'VALIDATION', false);
+  }
+}
+
+
 // ----------------- INSTRUMENT ERRORS -----------------
 export class MarketInstrumentInvalidError extends MarketDataDomainError {
   constructor(message: string = 'Market instrument contains invalid data.') {
