@@ -133,17 +133,26 @@ describe('RegisterDailyMarketBarService', () => {
   });
 
   it('B. Domain invalid short-circuit', async () => {
-    const req = { ...validRequest, open: 'invalid' };
-    await expect(service.execute(req)).rejects.toThrow(DailyMarketBarInvalidError);
+    const cases = [
+      { ...validRequest, open: 'invalid' }, // malformed canonical integer
+      { ...validRequest, correctionVersion: 1, supersedesBarHash: null }, // invalid correction relation
+      { ...validRequest, sourceRowHash: 'short' } // invalid sourceRowHash
+    ];
+    for (const req of cases) {
+      await expect(service.execute(req)).rejects.toThrow(DailyMarketBarInvalidError);
+    }
     expect(mocks.getSourceVersionService.execute).not.toHaveBeenCalled();
+    expect(mocks.instrumentQueryRepository.findByBusinessKey).not.toHaveBeenCalled();
     expect(mocks.importBatchLookup.findById).not.toHaveBeenCalled();
+    expect(mocks.queryRepository.findByCanonicalHash).not.toHaveBeenCalled();
     expect(mocks.appendRepository.insert).not.toHaveBeenCalled();
   });
 
   it('C. Missing SourceVersion', async () => {
     setupSuccess();
-    vi.mocked(mocks.getSourceVersionService.execute).mockRejectedValue(new MarketSourceVersionNotFoundError());
-    await expect(service.execute(validRequest)).rejects.toThrow(MarketSourceVersionNotFoundError);
+    const error = new MarketSourceVersionNotFoundError();
+    vi.mocked(mocks.getSourceVersionService.execute).mockRejectedValue(error);
+    await expect(service.execute(validRequest)).rejects.toBe(error);
   });
 
   it('D. Missing Instrument', async () => {
@@ -267,6 +276,31 @@ describe('RegisterDailyMarketBarService', () => {
     expect(mocks.appendRepository.insert).not.toHaveBeenCalled();
   });
 
+  it('J2. Canonical replay with different importBatchId', async () => {
+    setupSuccess();
+    const newReq = { ...validRequest, importBatchId: 'batch-999' };
+    vi.mocked(mocks.importBatchLookup.findById).mockResolvedValue({
+      id: 'batch-999',
+      sourceVersionId: mockSourceVersion.id,
+      status: 'PENDING'
+    });
+    const existing: DailyMarketBar = {
+      id: 'bar-existing',
+      sourceVersionId: mockSourceVersion.id,
+      instrumentId: mockInstrument.id,
+      sourceRecordKey: newReq.sourceRecordKey,
+      marketDate: newReq.marketDate,
+      correctionVersion: newReq.correctionVersion,
+      canonicalHash: getCanonicalHash(newReq),
+    } as any;
+    vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(existing);
+
+    const result = await service.execute(newReq);
+    expect(result.outcome).toBe('REPLAYED');
+    expect(result.bar).toBe(existing);
+    expect(mocks.appendRepository.insert).not.toHaveBeenCalled();
+  });
+
   it('K. Canonical hash inconsistent identity', async () => {
     setupSuccess();
     const existing: DailyMarketBar = {
@@ -330,6 +364,53 @@ describe('RegisterDailyMarketBarService', () => {
     const result = await service.execute(correctionRequest);
     expect(result.outcome).toBe('CREATED');
     expect(vi.mocked(mocks.appendRepository.insert).mock.calls[0][0].supersedesBarId).toBe('bar-0');
+  });
+
+  it('M2. Exact N-1 correction rule (v3 -> v2 allowed)', async () => {
+    setupSuccess();
+    const v3Req = { ...validRequest, correctionVersion: 3, supersedesBarHash: 'b'.repeat(64) };
+    const predecessorV2: DailyMarketBar = {
+      id: 'bar-v2',
+      sourceVersionId: mockSourceVersion.id,
+      instrumentId: mockInstrument.id,
+      marketDate: v3Req.marketDate,
+      sourceRecordKey: v3Req.sourceRecordKey,
+      correctionVersion: 2, // exactly N-1
+      canonicalHash: 'b'.repeat(64),
+    } as any;
+    
+    vi.mocked(mocks.queryRepository.findByCanonicalHash).mockImplementation(async (hash: string) => {
+      if (hash === 'b'.repeat(64)) return predecessorV2;
+      return null;
+    });
+    
+    const mockBar = { id: 'bar-v3' } as DailyMarketBar;
+    vi.mocked(mocks.appendRepository.insert).mockResolvedValue(mockBar);
+
+    const result = await service.execute(v3Req);
+    expect(result.outcome).toBe('CREATED');
+    expect(vi.mocked(mocks.appendRepository.insert).mock.calls[0][0].supersedesBarId).toBe('bar-v2');
+  });
+
+  it('M3. Exact N-1 correction rule (v3 -> v1 rejected)', async () => {
+    setupSuccess();
+    const v3Req = { ...validRequest, correctionVersion: 3, supersedesBarHash: 'c'.repeat(64) };
+    const predecessorV1: DailyMarketBar = {
+      id: 'bar-v1',
+      sourceVersionId: mockSourceVersion.id,
+      instrumentId: mockInstrument.id,
+      marketDate: v3Req.marketDate,
+      sourceRecordKey: v3Req.sourceRecordKey,
+      correctionVersion: 1, // NOT N-1
+      canonicalHash: 'c'.repeat(64),
+    } as any;
+    
+    vi.mocked(mocks.queryRepository.findByCanonicalHash).mockImplementation(async (hash: string) => {
+      if (hash === 'c'.repeat(64)) return predecessorV1;
+      return null;
+    });
+
+    await expect(service.execute(v3Req)).rejects.toThrow(/correction predecessor is inconsistent/);
   });
 
   it('N. Missing predecessor', async () => {
@@ -468,6 +549,15 @@ describe('RegisterDailyMarketBarService', () => {
     await service.execute(validRequest);
     const command = vi.mocked(mocks.appendRepository.insert).mock.calls[0][0];
 
+    const expectedKeys = [
+      'sourceVersionId', 'importBatchId', 'instrumentId', 'sourceRecordKey',
+      'marketDate', 'barKind', 'open', 'high', 'low', 'close', 'volume',
+      'tradingValue', 'correctionVersion', 'supersedesBarId', 'qualityDecision',
+      'qualityFlags', 'sourceRowHash', 'canonicalHash'
+    ].sort();
+    
+    expect(Object.keys(command).sort()).toEqual(expectedKeys);
+
     expect(command).toStrictEqual({
       sourceVersionId: mockSourceVersion.id,
       importBatchId: validRequest.importBatchId,
@@ -526,7 +616,7 @@ describe('RegisterDailyMarketBarService', () => {
       vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
       
       vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(null);
-      // On retry, Identity A is found
+      // On retry, Identity A is found with different hash
       vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockResolvedValueOnce(null);
       vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockResolvedValueOnce({
         id: 'bar-z',
@@ -534,6 +624,53 @@ describe('RegisterDailyMarketBarService', () => {
       } as any);
 
       await expect(service.execute(validRequest)).rejects.toThrow(/conflicts with existing canonical content/);
+    });
+
+    it('AA2. Technical unique collision -> identical identity (Identity A)', async () => {
+      setupSuccess();
+      vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
+      
+      const requestHash = getCanonicalHash(validRequest);
+      
+      vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(null);
+      // On retry, Identity A is found with matching canonical hash
+      vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockImplementation(async (sv, inst, date, ver) => {
+        if (sv === mockSourceVersion.id && inst === mockInstrument.id && date === validRequest.marketDate && ver === validRequest.correctionVersion) {
+          return {
+            id: 'bar-a-replay',
+            canonicalHash: requestHash
+          } as any;
+        }
+        return null;
+      });
+
+      const res = await service.execute(validRequest);
+      expect(res.outcome).toBe('REPLAYED');
+      expect(res.bar.id).toBe('bar-a-replay');
+    });
+
+    it('AA3. Technical unique collision -> identical identity (Identity B)', async () => {
+      setupSuccess();
+      vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
+      
+      const requestHash = getCanonicalHash(validRequest);
+      
+      vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(null);
+      vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockResolvedValue(null);
+      // On retry, Identity B is found with matching canonical hash
+      vi.mocked(mocks.queryRepository.findBySourceRecordVersion).mockImplementation(async (sv, record, ver) => {
+        if (sv === mockSourceVersion.id && record === validRequest.sourceRecordKey && ver === validRequest.correctionVersion) {
+          return {
+            id: 'bar-b-replay',
+            canonicalHash: requestHash
+          } as any;
+        }
+        return null;
+      });
+
+      const res = await service.execute(validRequest);
+      expect(res.outcome).toBe('REPLAYED');
+      expect(res.bar.id).toBe('bar-b-replay');
     });
 
     it('AB. Technical unique collision -> unresolved', async () => {
@@ -555,7 +692,29 @@ describe('RegisterDailyMarketBarService', () => {
     const error = new Error('Database down');
     vi.mocked(mocks.appendRepository.insert).mockRejectedValue(error);
     
-    await expect(service.execute(validRequest)).rejects.toThrow('Database down');
+    await expect(service.execute(validRequest)).rejects.toBe(error);
+  });
+
+  describe('Application Architecture Scan', () => {
+    it('should not contain forbidden imports', () => {
+      const fs = require('fs');
+      const path = require('path');
+      
+      const portsPath = path.resolve(__dirname, '../../../../src/application/ports/market-data/DailyMarketBarPorts.ts');
+      const servicePath = path.resolve(__dirname, '../../../../src/application/services/market-data/RegisterDailyMarketBarService.ts');
+      
+      const checkFile = (filepath: string) => {
+        const content = fs.readFileSync(filepath, 'utf-8');
+        expect(content).not.toMatch(/@prisma\/client/);
+        expect(content).not.toMatch(/from 'prisma'/);
+        expect(content).not.toMatch(/\/infrastructure\//);
+        expect(content).not.toMatch(/\$queryRaw/);
+        expect(content).not.toMatch(/\$executeRaw/);
+      };
+      
+      checkFile(portsPath);
+      checkFile(servicePath);
+    });
   });
 
 });

@@ -47,7 +47,7 @@ export interface AppendDailyMarketBarCommand {
   correctionVersion: number;
   supersedesBarId: string | null;
   qualityDecision: MarketQualityDecision;
-  qualityFlags: string | null;
+  qualityFlags: string;
   sourceRowHash: string;
   canonicalHash: string;
 }

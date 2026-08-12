@@ -6,7 +6,6 @@ import {
   MarketImportInvalidTransitionError,
   MarketImportNotFoundError,
   MarketInstrumentNotFoundError,
-  MarketSourceVersionNotFoundError,
 } from '../../../domain/market-data/MarketDataErrors';
 import { IMarketInstrumentQueryRepository } from '../../ports/market-data/IMarketInstrumentQueryRepository';
 import { GetMarketDataSourceVersionService } from './source-version/GetMarketDataSourceVersionService';
@@ -57,7 +56,7 @@ export class RegisterDailyMarketBarService {
       supersedesBarHash: request.supersedesBarHash,
     };
 
-    const { hash } = DailyMarketBarDomain.buildCanonicalHash(canonicalPayload);
+    const { payload, hash } = DailyMarketBarDomain.buildCanonicalHash(canonicalPayload);
 
     // 2. RESOLVE SOURCE VERSION
     const resolvedSourceVersion = await this.getSourceVersionService.execute({ sourceKey: request.sourceVersionKey });
@@ -70,7 +69,7 @@ export class RegisterDailyMarketBarService {
 
     // 4. INSTRUMENT LISTING DATE INVARIANT
     // marketDate >= effectiveFrom and (effectiveTo === null or marketDate <= effectiveTo)
-    if (request.marketDate < resolvedInstrument.effectiveFrom || (resolvedInstrument.effectiveTo !== null && request.marketDate > resolvedInstrument.effectiveTo)) {
+    if (payload.marketDate < resolvedInstrument.effectiveFrom || (resolvedInstrument.effectiveTo !== null && payload.marketDate > resolvedInstrument.effectiveTo)) {
       throw new DailyMarketBarInvalidError('Instrument listing is not active on marketDate.');
     }
 
@@ -94,9 +93,9 @@ export class RegisterDailyMarketBarService {
       if (
         existingByHash.sourceVersionId !== resolvedSourceVersion.id ||
         existingByHash.instrumentId !== resolvedInstrument.id ||
-        existingByHash.sourceRecordKey !== request.sourceRecordKey ||
-        existingByHash.marketDate !== request.marketDate ||
-        existingByHash.correctionVersion !== request.correctionVersion ||
+        existingByHash.sourceRecordKey !== payload.sourceRecordKey ||
+        existingByHash.marketDate !== payload.marketDate ||
+        existingByHash.correctionVersion !== payload.correctionVersion ||
         existingByHash.canonicalHash !== hash
       ) {
         throw new MarketDataIntegrityError('Daily market bar canonical hash resolves to inconsistent identity.');
@@ -106,22 +105,19 @@ export class RegisterDailyMarketBarService {
 
     // 8. CORRECTION / PREDECESSOR RULES
     let supersedesBarId: string | null = null;
-    if (request.correctionVersion === 0) {
+    if (payload.correctionVersion === 0) {
       supersedesBarId = null;
     } else {
-      if (!request.supersedesBarHash) {
-        throw new MarketDataIntegrityError('Missing supersedesBarHash for correction bar.');
-      }
-      const predecessor = await this.queryRepository.findByCanonicalHash(request.supersedesBarHash);
+      const predecessor = await this.queryRepository.findByCanonicalHash(payload.supersedesBarHash!);
       if (!predecessor) {
         throw new MarketDataIntegrityError('Daily market bar predecessor was not found.');
       }
       if (
         predecessor.sourceVersionId !== resolvedSourceVersion.id ||
         predecessor.instrumentId !== resolvedInstrument.id ||
-        predecessor.marketDate !== request.marketDate ||
-        predecessor.sourceRecordKey !== request.sourceRecordKey ||
-        predecessor.correctionVersion !== request.correctionVersion - 1
+        predecessor.marketDate !== payload.marketDate ||
+        predecessor.sourceRecordKey !== payload.sourceRecordKey ||
+        predecessor.correctionVersion !== payload.correctionVersion - 1
       ) {
         throw new MarketDataIntegrityError('Daily market bar correction predecessor is inconsistent.');
       }
@@ -140,7 +136,7 @@ export class RegisterDailyMarketBarService {
 
     // 10. IDENTITY PREFLIGHT
     // Identity A
-    const identityA = await this.queryRepository.findBySourceInstrumentDateVersion(resolvedSourceVersion.id, resolvedInstrument.id, request.marketDate, request.correctionVersion);
+    const identityA = await this.queryRepository.findBySourceInstrumentDateVersion(resolvedSourceVersion.id, resolvedInstrument.id, payload.marketDate, payload.correctionVersion);
     if (identityA) {
       if (identityA.canonicalHash === hash) {
         return { outcome: 'REPLAYED', bar: identityA };
@@ -149,7 +145,7 @@ export class RegisterDailyMarketBarService {
     }
 
     // Identity B
-    const identityB = await this.queryRepository.findBySourceRecordVersion(resolvedSourceVersion.id, request.sourceRecordKey, request.correctionVersion);
+    const identityB = await this.queryRepository.findBySourceRecordVersion(resolvedSourceVersion.id, payload.sourceRecordKey, payload.correctionVersion);
     if (identityB) {
       if (identityB.canonicalHash === hash) {
         return { outcome: 'REPLAYED', bar: identityB };
@@ -162,20 +158,20 @@ export class RegisterDailyMarketBarService {
       sourceVersionId: resolvedSourceVersion.id,
       importBatchId: request.importBatchId,
       instrumentId: resolvedInstrument.id,
-      sourceRecordKey: request.sourceRecordKey,
-      marketDate: request.marketDate,
-      barKind: request.barKind,
-      open: request.open,
-      high: request.high,
-      low: request.low,
-      close: request.close,
-      volume: request.volume,
-      tradingValue: request.tradingValue,
-      correctionVersion: request.correctionVersion,
+      sourceRecordKey: payload.sourceRecordKey,
+      marketDate: payload.marketDate,
+      barKind: payload.barKind,
+      open: payload.open,
+      high: payload.high,
+      low: payload.low,
+      close: payload.close,
+      volume: payload.volume,
+      tradingValue: payload.tradingValue,
+      correctionVersion: payload.correctionVersion,
       supersedesBarId,
-      qualityDecision: request.qualityDecision,
-      qualityFlags: request.qualityFlags,
-      sourceRowHash: request.sourceRowHash,
+      qualityDecision: payload.qualityDecision,
+      qualityFlags: payload.qualityFlags,
+      sourceRowHash: payload.sourceRowHash,
       canonicalHash: hash,
     };
 
@@ -191,9 +187,9 @@ export class RegisterDailyMarketBarService {
           if (
             reReadHash.sourceVersionId === resolvedSourceVersion.id &&
             reReadHash.instrumentId === resolvedInstrument.id &&
-            reReadHash.sourceRecordKey === request.sourceRecordKey &&
-            reReadHash.marketDate === request.marketDate &&
-            reReadHash.correctionVersion === request.correctionVersion &&
+            reReadHash.sourceRecordKey === payload.sourceRecordKey &&
+            reReadHash.marketDate === payload.marketDate &&
+            reReadHash.correctionVersion === payload.correctionVersion &&
             reReadHash.canonicalHash === hash
           ) {
             return { outcome: 'REPLAYED', bar: reReadHash };
@@ -201,14 +197,20 @@ export class RegisterDailyMarketBarService {
         }
         
         // 2. sourceVersion + instrument + marketDate + correctionVersion
-        const reReadA = await this.queryRepository.findBySourceInstrumentDateVersion(resolvedSourceVersion.id, resolvedInstrument.id, request.marketDate, request.correctionVersion);
-        if (reReadA && reReadA.canonicalHash !== hash) {
+        const reReadA = await this.queryRepository.findBySourceInstrumentDateVersion(resolvedSourceVersion.id, resolvedInstrument.id, payload.marketDate, payload.correctionVersion);
+        if (reReadA) {
+          if (reReadA.canonicalHash === hash) {
+            return { outcome: 'REPLAYED', bar: reReadA };
+          }
           throw new MarketDataIntegrityError('Daily market bar unique collision conflicts with existing canonical content.');
         }
 
         // 3. sourceVersion + sourceRecordKey + correctionVersion
-        const reReadB = await this.queryRepository.findBySourceRecordVersion(resolvedSourceVersion.id, request.sourceRecordKey, request.correctionVersion);
-        if (reReadB && reReadB.canonicalHash !== hash) {
+        const reReadB = await this.queryRepository.findBySourceRecordVersion(resolvedSourceVersion.id, payload.sourceRecordKey, payload.correctionVersion);
+        if (reReadB) {
+          if (reReadB.canonicalHash === hash) {
+            return { outcome: 'REPLAYED', bar: reReadB };
+          }
           throw new MarketDataIntegrityError('Daily market bar unique collision conflicts with existing canonical content.');
         }
 
