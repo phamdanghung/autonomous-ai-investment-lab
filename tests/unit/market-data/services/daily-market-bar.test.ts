@@ -145,6 +145,9 @@ describe('RegisterDailyMarketBarService', () => {
     expect(mocks.instrumentQueryRepository.findByBusinessKey).not.toHaveBeenCalled();
     expect(mocks.importBatchLookup.findById).not.toHaveBeenCalled();
     expect(mocks.queryRepository.findByCanonicalHash).not.toHaveBeenCalled();
+    expect(mocks.queryRepository.findBySourceInstrumentDateVersion).not.toHaveBeenCalled();
+    expect(mocks.queryRepository.findBySourceRecordVersion).not.toHaveBeenCalled();
+    expect(mocks.queryRepository.findBySupersedesBarId).not.toHaveBeenCalled();
     expect(mocks.appendRepository.insert).not.toHaveBeenCalled();
   });
 
@@ -611,6 +614,28 @@ describe('RegisterDailyMarketBarService', () => {
       expect(res.bar.id).toBe('bar-z');
     });
 
+    it('Z2. Technical unique collision -> canonical hash inconsistent identity', async () => {
+      setupSuccess();
+      vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
+      
+      const requestHash = getCanonicalHash(validRequest);
+      
+      vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValueOnce(null); // Pre-flight
+      vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValueOnce({
+        id: 'bar-z',
+        sourceVersionId: mockSourceVersion.id,
+        instrumentId: mockInstrument.id,
+        sourceRecordKey: 'wrong-key', // WRONG
+        marketDate: validRequest.marketDate,
+        correctionVersion: validRequest.correctionVersion,
+        canonicalHash: requestHash,
+      } as any); // Retry
+
+      await expect(service.execute(validRequest)).rejects.toThrow(/canonical hash resolves to inconsistent identity/);
+      expect(mocks.queryRepository.findBySourceInstrumentDateVersion).toHaveBeenCalledTimes(1);
+      expect(mocks.queryRepository.findBySourceRecordVersion).toHaveBeenCalledTimes(1);
+    });
+
     it('AA. Technical unique collision -> conflicting identity (Identity A)', async () => {
       setupSuccess();
       vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
@@ -631,22 +656,28 @@ describe('RegisterDailyMarketBarService', () => {
       vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
       
       const requestHash = getCanonicalHash(validRequest);
+      const existing = {
+        id: 'bar-a-replay',
+        sourceVersionId: mockSourceVersion.id,
+        instrumentId: mockInstrument.id,
+        sourceRecordKey: validRequest.sourceRecordKey,
+        marketDate: validRequest.marketDate,
+        correctionVersion: validRequest.correctionVersion,
+        canonicalHash: requestHash
+      } as any;
       
       vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(null);
       // On retry, Identity A is found with matching canonical hash
       vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockImplementation(async (sv, inst, date, ver) => {
         if (sv === mockSourceVersion.id && inst === mockInstrument.id && date === validRequest.marketDate && ver === validRequest.correctionVersion) {
-          return {
-            id: 'bar-a-replay',
-            canonicalHash: requestHash
-          } as any;
+          return existing;
         }
         return null;
       });
 
       const res = await service.execute(validRequest);
       expect(res.outcome).toBe('REPLAYED');
-      expect(res.bar.id).toBe('bar-a-replay');
+      expect(res.bar).toBe(existing);
     });
 
     it('AA3. Technical unique collision -> identical identity (Identity B)', async () => {
@@ -654,23 +685,72 @@ describe('RegisterDailyMarketBarService', () => {
       vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
       
       const requestHash = getCanonicalHash(validRequest);
+      const existing = {
+        id: 'bar-b-replay',
+        sourceVersionId: mockSourceVersion.id,
+        instrumentId: mockInstrument.id,
+        sourceRecordKey: validRequest.sourceRecordKey,
+        marketDate: validRequest.marketDate,
+        correctionVersion: validRequest.correctionVersion,
+        canonicalHash: requestHash
+      } as any;
       
       vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(null);
       vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockResolvedValue(null);
       // On retry, Identity B is found with matching canonical hash
       vi.mocked(mocks.queryRepository.findBySourceRecordVersion).mockImplementation(async (sv, record, ver) => {
         if (sv === mockSourceVersion.id && record === validRequest.sourceRecordKey && ver === validRequest.correctionVersion) {
-          return {
-            id: 'bar-b-replay',
-            canonicalHash: requestHash
-          } as any;
+          return existing;
         }
         return null;
       });
 
       const res = await service.execute(validRequest);
       expect(res.outcome).toBe('REPLAYED');
-      expect(res.bar.id).toBe('bar-b-replay');
+      expect(res.bar).toBe(existing);
+    });
+
+    it('AA4. Technical unique collision -> same hash inconsistent identity (Identity A)', async () => {
+      setupSuccess();
+      vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
+      
+      const requestHash = getCanonicalHash(validRequest);
+      
+      vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(null);
+      vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockResolvedValueOnce(null);
+      vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockResolvedValueOnce({
+        id: 'bar-a-wrong',
+        sourceVersionId: mockSourceVersion.id,
+        instrumentId: mockInstrument.id,
+        sourceRecordKey: 'wrong-key', // WRONG
+        marketDate: validRequest.marketDate,
+        correctionVersion: validRequest.correctionVersion,
+        canonicalHash: requestHash
+      } as any);
+
+      await expect(service.execute(validRequest)).rejects.toThrow(/unique collision resolves to inconsistent identity/);
+    });
+
+    it('AA5. Technical unique collision -> same hash inconsistent identity (Identity B)', async () => {
+      setupSuccess();
+      vi.mocked(mocks.appendRepository.insert).mockRejectedValue(new DailyMarketBarUniqueCollisionError());
+      
+      const requestHash = getCanonicalHash(validRequest);
+      
+      vi.mocked(mocks.queryRepository.findByCanonicalHash).mockResolvedValue(null);
+      vi.mocked(mocks.queryRepository.findBySourceInstrumentDateVersion).mockResolvedValue(null);
+      vi.mocked(mocks.queryRepository.findBySourceRecordVersion).mockResolvedValueOnce(null);
+      vi.mocked(mocks.queryRepository.findBySourceRecordVersion).mockResolvedValueOnce({
+        id: 'bar-b-wrong',
+        sourceVersionId: mockSourceVersion.id,
+        instrumentId: 'wrong-instrument', // WRONG
+        sourceRecordKey: validRequest.sourceRecordKey,
+        marketDate: validRequest.marketDate,
+        correctionVersion: validRequest.correctionVersion,
+        canonicalHash: requestHash
+      } as any);
+
+      await expect(service.execute(validRequest)).rejects.toThrow(/unique collision resolves to inconsistent identity/);
     });
 
     it('AB. Technical unique collision -> unresolved', async () => {

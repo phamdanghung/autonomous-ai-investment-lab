@@ -194,13 +194,24 @@ export class RegisterDailyMarketBarService {
           ) {
             return { outcome: 'REPLAYED', bar: reReadHash };
           }
+          throw new MarketDataIntegrityError('Daily market bar canonical hash resolves to inconsistent identity.');
         }
         
         // 2. sourceVersion + instrument + marketDate + correctionVersion
         const reReadA = await this.queryRepository.findBySourceInstrumentDateVersion(resolvedSourceVersion.id, resolvedInstrument.id, payload.marketDate, payload.correctionVersion);
         if (reReadA) {
-          if (reReadA.canonicalHash === hash) {
+          if (
+            reReadA.canonicalHash === hash &&
+            reReadA.sourceVersionId === resolvedSourceVersion.id &&
+            reReadA.instrumentId === resolvedInstrument.id &&
+            reReadA.sourceRecordKey === payload.sourceRecordKey &&
+            reReadA.marketDate === payload.marketDate &&
+            reReadA.correctionVersion === payload.correctionVersion
+          ) {
             return { outcome: 'REPLAYED', bar: reReadA };
+          }
+          if (reReadA.canonicalHash === hash) {
+            throw new MarketDataIntegrityError('Daily market bar unique collision resolves to inconsistent identity.');
           }
           throw new MarketDataIntegrityError('Daily market bar unique collision conflicts with existing canonical content.');
         }
@@ -208,8 +219,18 @@ export class RegisterDailyMarketBarService {
         // 3. sourceVersion + sourceRecordKey + correctionVersion
         const reReadB = await this.queryRepository.findBySourceRecordVersion(resolvedSourceVersion.id, payload.sourceRecordKey, payload.correctionVersion);
         if (reReadB) {
-          if (reReadB.canonicalHash === hash) {
+          if (
+            reReadB.canonicalHash === hash &&
+            reReadB.sourceVersionId === resolvedSourceVersion.id &&
+            reReadB.instrumentId === resolvedInstrument.id &&
+            reReadB.sourceRecordKey === payload.sourceRecordKey &&
+            reReadB.marketDate === payload.marketDate &&
+            reReadB.correctionVersion === payload.correctionVersion
+          ) {
             return { outcome: 'REPLAYED', bar: reReadB };
+          }
+          if (reReadB.canonicalHash === hash) {
+            throw new MarketDataIntegrityError('Daily market bar unique collision resolves to inconsistent identity.');
           }
           throw new MarketDataIntegrityError('Daily market bar unique collision conflicts with existing canonical content.');
         }
