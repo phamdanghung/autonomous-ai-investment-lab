@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as Errors from '../../../src/domain/market-data/MarketDataErrors';
 
 describe('MarketDataErrors', () => {
-  it('should have exactly 16 error codes in the inventory with full metadata', () => {
+  it('should have exactly 18 error codes in the inventory with full metadata', () => {
     const expectedCodes = [
       'MARKET_INSTRUMENT_INVALID',
       'MARKET_INSTRUMENT_OVERLAP',
@@ -71,5 +71,14 @@ describe('MarketDataErrors', () => {
     expect(error.message).toBe('Concurrent market-data operation conflict.');
     expect(error.safeMessage).toBe('Concurrent market-data operation conflict.');
     expect(error.safeMessage).toBe(error.message);
+  });
+
+  it('DailyMarketBarInvalidError metadata contract', () => {
+    const error = new Errors.DailyMarketBarInvalidError();
+    expect(error.code).toBe('DAILY_MARKET_BAR_INVALID');
+    expect(error.category).toBe('VALIDATION');
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe('Daily market bar contains invalid data.');
+    expect(error.safeMessage).toBe('The provided daily market bar is invalid.');
   });
 });

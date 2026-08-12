@@ -1,4 +1,4 @@
-import { MARKET_DATA_CONTRACT_VERSIONS, CanonicalDailyBarPayload, MarketBarKind, MarketQualityDecision, MARKET_EXCHANGES } from '../contracts/MarketDataContracts';
+import { MARKET_DATA_CONTRACT_VERSIONS, CanonicalDailyBarPayload, MarketBarKind, MarketQualityDecision, MARKET_EXCHANGES, MarketExchange, SecurityType } from '../contracts/MarketDataContracts';
 import { DailyMarketBarInvalidError } from './MarketDataErrors';
 import { MarketDataValidation } from './MarketDataValidation';
 import { MarketInstrumentDomain } from './MarketInstrument';
@@ -102,10 +102,10 @@ export class DailyMarketBarDomain {
       if (parts.length !== 5 || parts[0] !== 'VN' || parts[3] !== 'EQUITY') {
         throw new DailyMarketBarInvalidError('Invalid instrumentBusinessKey format');
       }
-      if (!MARKET_EXCHANGES.includes(parts[1] as any)) {
+      if (!MARKET_EXCHANGES.includes(parts[1] as unknown as MarketExchange)) {
         throw new DailyMarketBarInvalidError('Invalid exchange in instrumentBusinessKey');
       }
-      const expected = MarketInstrumentDomain.buildBusinessKey(parts[1] as any, parts[2], parts[3] as any, parts[4]);
+      const expected = MarketInstrumentDomain.buildBusinessKey(parts[1] as unknown as MarketExchange, parts[2], parts[3] as unknown as SecurityType, parts[4]);
       if (expected !== key) {
         throw new DailyMarketBarInvalidError('instrumentBusinessKey is not canonical');
       }
@@ -138,7 +138,7 @@ export class DailyMarketBarDomain {
     }
   }
 
-  private static validateQualityFlags(flags: any): void {
+  private static validateQualityFlags(flags: unknown): void {
     if (typeof flags !== 'string') {
       throw new DailyMarketBarInvalidError('qualityFlags must be a string');
     }
@@ -150,8 +150,8 @@ export class DailyMarketBarDomain {
     }
   }
 
-  private static validateCorrectionRelationship(version: any, supersedesHash: any): void {
-    if (!Number.isInteger(version) || version < 0) {
+  private static validateCorrectionRelationship(version: unknown, supersedesHash: unknown): void {
+    if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) {
       throw new DailyMarketBarInvalidError('Invalid correctionVersion');
     }
 
@@ -166,7 +166,7 @@ export class DailyMarketBarDomain {
     }
   }
 
-  private static validateDecimalString(name: string, value: any): void {
+  private static validateDecimalString(name: string, value: unknown): void {
     if (typeof value !== 'string') {
       throw new DailyMarketBarInvalidError(`${name} must be a string`);
     }
@@ -175,12 +175,12 @@ export class DailyMarketBarDomain {
     }
   }
 
-  private static validateDecimalStringOptional(name: string, value: any): void {
+  private static validateDecimalStringOptional(name: string, value: unknown): void {
     if (value === null) return;
     this.validateDecimalString(name, value);
   }
 
-  private static validateAcceptedTraded(input: any): void {
+  private static validateAcceptedTraded(input: Omit<CanonicalDailyBarPayload, 'barContractVersion'>): void {
     if (input.open === null || input.high === null || input.low === null || input.close === null) {
       throw new DailyMarketBarInvalidError('ACCEPTED TRADED bar must have all OHLC fields');
     }
@@ -217,7 +217,7 @@ export class DailyMarketBarDomain {
     }
   }
 
-  private static validateAcceptedNoTradeOrSuspended(input: any): void {
+  private static validateAcceptedNoTradeOrSuspended(input: Omit<CanonicalDailyBarPayload, 'barContractVersion'>): void {
     if (input.open !== null || input.high !== null || input.low !== null || input.close !== null) {
       throw new DailyMarketBarInvalidError(`ACCEPTED ${input.barKind} bar must have null OHLC`);
     }

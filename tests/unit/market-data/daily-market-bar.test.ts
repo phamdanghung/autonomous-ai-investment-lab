@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DailyMarketBarDomain } from '../../../src/domain/market-data/DailyMarketBar';
 import { DailyMarketBarInvalidError } from '../../../src/domain/market-data/MarketDataErrors';
-import { CanonicalDailyBarPayload, MARKET_DATA_CONTRACT_VERSIONS } from '../../../src/domain/contracts/MarketDataContracts';
+import { CanonicalDailyBarPayload, MARKET_DATA_CONTRACT_VERSIONS, MarketBarKind } from '../../../src/domain/contracts/MarketDataContracts';
 import { MarketInstrumentDomain } from '../../../src/domain/market-data/MarketInstrument';
 
 describe('DailyMarketBarDomain', () => {
@@ -69,11 +69,20 @@ describe('DailyMarketBarDomain', () => {
 
     it('deterministic hash & property-order independence', () => {
       const p1 = createValidPayload();
-      const p2 = { ...p1, high: p1.high, open: p1.open }; // Same properties, object spread may not change internal order, but CanonicalSerializer handles it
 
-      const h1 = DailyMarketBarDomain.buildCanonicalHash(p1).hash;
-      const h2 = DailyMarketBarDomain.buildCanonicalHash(p2).hash;
-      expect(h1).toBe(h2);
+      const p2: Record<string, unknown> = {};
+      const keys = Object.keys(p1).reverse() as (keyof typeof p1)[];
+      for (const key of keys) {
+        p2[key] = p1[key];
+      }
+
+      expect(Object.keys(p1)).not.toEqual(Object.keys(p2));
+
+      const res1 = DailyMarketBarDomain.buildCanonicalHash(p1);
+      const res2 = DailyMarketBarDomain.buildCanonicalHash(p2 as Omit<CanonicalDailyBarPayload, 'barContractVersion'>);
+
+      expect(res1.payload).toEqual(res2.payload);
+      expect(res1.hash).toBe(res2.hash);
     });
 
     it('single canonical field change changes hash', () => {
@@ -281,13 +290,13 @@ describe('DailyMarketBarDomain', () => {
       expect(payload.qualityFlags).toBe(' FLAG1, FLAG2 ');
     });
     it('must be string', () => {
-      assertInvalid(createValidPayload({ qualityFlags: null as any }));
+      assertInvalid(createValidPayload({ qualityFlags: null as unknown as string }));
     });
   });
 
   describe('J. Error contract', () => {
     it('throws DailyMarketBarInvalidError for unknown barKind', () => {
-      assertInvalid(createValidPayload({ barKind: 'UNKNOWN' as any }));
+      assertInvalid(createValidPayload({ barKind: 'UNKNOWN' as unknown as MarketBarKind }));
     });
   });
 });
