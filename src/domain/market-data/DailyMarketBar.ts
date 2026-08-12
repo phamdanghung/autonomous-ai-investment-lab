@@ -102,10 +102,13 @@ export class DailyMarketBarDomain {
       if (parts.length !== 5 || parts[0] !== 'VN' || parts[3] !== 'EQUITY') {
         throw new DailyMarketBarInvalidError('Invalid instrumentBusinessKey format');
       }
-      if (!MARKET_EXCHANGES.includes(parts[1] as unknown as MarketExchange)) {
+      const exchangeStr = parts[1];
+      const foundExchange = MARKET_EXCHANGES.find(e => e === exchangeStr);
+      if (foundExchange === undefined) {
         throw new DailyMarketBarInvalidError('Invalid exchange in instrumentBusinessKey');
       }
-      const expected = MarketInstrumentDomain.buildBusinessKey(parts[1] as unknown as MarketExchange, parts[2], parts[3] as unknown as SecurityType, parts[4]);
+      
+      const expected = MarketInstrumentDomain.buildBusinessKey(foundExchange, parts[2], 'EQUITY', parts[4]);
       if (expected !== key) {
         throw new DailyMarketBarInvalidError('instrumentBusinessKey is not canonical');
       }
