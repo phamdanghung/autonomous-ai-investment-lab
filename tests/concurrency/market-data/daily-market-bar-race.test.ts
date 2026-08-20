@@ -9,6 +9,7 @@ import { PrismaMarketDataSourceRepository } from '../../../src/infrastructure/re
 import { GetMarketDataSourceVersionService } from '../../../src/application/services/market-data/source-version/GetMarketDataSourceVersionService';
 
 import { MarketDataIntegrityError } from '../../../src/domain/market-data/MarketDataErrors';
+import { DailyMarketBarUniqueCollisionError } from '../../../src/application/ports/market-data/DailyMarketBarPorts';
 import { MarketInstrumentDomain } from '../../../src/domain/market-data/MarketInstrument';
 
 describe('DailyMarketBar Concurrency Race', () => {
@@ -110,6 +111,10 @@ describe('DailyMarketBar Concurrency Race', () => {
     await basePrismaA.$connect();
     await basePrismaB.$connect();
 
+    const pidA = (await basePrismaA.$queryRaw<{pg_backend_pid: number}[]>`SELECT pg_backend_pid()`)[0].pg_backend_pid;
+    const pidB = (await basePrismaB.$queryRaw<{pg_backend_pid: number}[]>`SELECT pg_backend_pid()`)[0].pg_backend_pid;
+    expect(pidA).not.toBe(pidB);
+
     // Setup barrier
     readyCount = 0;
     barrier = new Promise<void>(resolve => release = resolve);
@@ -203,13 +208,22 @@ describe('DailyMarketBar Concurrency Race', () => {
       (vA.outcome === 'REPLAYED' && vB.outcome === 'CREATED')
     ).toBe(true);
 
+    const expectedWinningBatchId = vA.outcome === 'CREATED' ? pendingBatchAId : pendingBatchBId;
+
     expect(vA.bar.id).toBe(vB.bar.id);
     expect(vA.bar.canonicalHash).toBe(vB.bar.canonicalHash);
+    expect(vA.bar.importBatchId).toBe(expectedWinningBatchId);
+    expect(vB.bar.importBatchId).toBe(expectedWinningBatchId);
 
     // Final DB checks
     const p = new PrismaClient({ datasourceUrl: isolatedSchema.databaseUrl });
     const count = await p.dailyMarketBar.count({ where: { canonicalHash: vA.bar.canonicalHash } });
     expect(count).toBe(1);
+
+    const dbRow = await p.dailyMarketBar.findUnique({ where: { canonicalHash: vA.bar.canonicalHash } });
+    expect(dbRow).not.toBeNull();
+    expect(dbRow!.importBatchId).toBe(expectedWinningBatchId);
+
     await p.$disconnect();
   });
 
@@ -239,6 +253,7 @@ describe('DailyMarketBar Concurrency Race', () => {
     const error = (rejected[0] as PromiseRejectedResult).reason;
     expect(error).toBeInstanceOf(MarketDataIntegrityError);
     expect(error.message).toBe('Daily market bar unique collision conflicts with existing canonical content.');
+    expect(error).not.toBeInstanceOf(DailyMarketBarUniqueCollisionError);
     expect(error).not.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     expect(error).not.toBeInstanceOf(Prisma.PrismaClientUnknownRequestError);
 
@@ -282,7 +297,9 @@ describe('DailyMarketBar Concurrency Race', () => {
     const error = (rejected[0] as PromiseRejectedResult).reason;
     expect(error).toBeInstanceOf(MarketDataIntegrityError);
     expect(error.message).toBe('Daily market bar unique collision conflicts with existing canonical content.');
+    expect(error).not.toBeInstanceOf(DailyMarketBarUniqueCollisionError);
     expect(error).not.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).not.toBeInstanceOf(Prisma.PrismaClientUnknownRequestError);
 
     const p = new PrismaClient({ datasourceUrl: isolatedSchema.databaseUrl });
     const count = await p.dailyMarketBar.count({
@@ -341,7 +358,8 @@ describe('DailyMarketBar Concurrency Race', () => {
     expect(fulfilled.length).toBe(1);
     expect(rejected.length).toBe(1);
 
-    expect((fulfilled[0] as any).value.outcome).toBe('CREATED');
+    const winningV1 = (fulfilled[0] as any).value;
+    expect(winningV1.outcome).toBe('CREATED');
 
     const error = (rejected[0] as PromiseRejectedResult).reason;
     expect(error).toBeInstanceOf(MarketDataIntegrityError);
@@ -351,8 +369,18 @@ describe('DailyMarketBar Concurrency Race', () => {
       msg === 'Daily market bar unique collision conflicts with existing canonical content.' ||
       msg === 'Daily market bar predecessor has already been superseded.'
     ).toBe(true);
+    expect(error).not.toBeInstanceOf(DailyMarketBarUniqueCollisionError);
+    expect(error).not.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).not.toBeInstanceOf(Prisma.PrismaClientUnknownRequestError);
 
     const p = new PrismaClient({ datasourceUrl: isolatedSchema.databaseUrl });
+    const observerRepo = new PrismaDailyMarketBarRepository(p);
+
+    const lookup = await observerRepo.findBySupersedesBarId(v0Id);
+    expect(lookup).not.toBeNull();
+    expect(lookup!.id).toBe(winningV1.bar.id);
+    expect(lookup!.canonicalHash).toBe(winningV1.bar.canonicalHash);
+
     // Check v0 still exists
     const v0Check = await p.dailyMarketBar.findUnique({ where: { id: v0Id } });
     expect(v0Check).toBeDefined();
