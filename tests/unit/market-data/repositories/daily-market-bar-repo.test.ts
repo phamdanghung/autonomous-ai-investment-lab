@@ -197,19 +197,66 @@ describe('PrismaDailyMarketBarRepository', () => {
       const p2003 = new Prisma.PrismaClientKnownRequestError('fk fail', { code: 'P2003', clientVersion: '4' });
       prismaMock.dailyMarketBar.create.mockRejectedValue(p2003);
       
-      await expect(repository.insert(baseCommand)).rejects.toThrowError(MarketDataIntegrityError);
-      await expect(repository.insert(baseCommand)).rejects.toThrowError('Daily market bar references missing persistence identity.');
+      let error: any;
+      try {
+        await repository.insert(baseCommand);
+      } catch (e: any) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(MarketDataIntegrityError);
+      expect(error.message).toBe('Daily market bar references missing persistence identity.');
+      expect(error.message).not.toContain('fk fail');
+      expect(error.message).not.toContain('P2003');
     });
 
-    it('I. Other P2xxx -> MarketDataIntegrityError', async () => {
+    it('I. P2025 INSERT -> MarketDataIntegrityError', async () => {
+      const p2025 = new Prisma.PrismaClientKnownRequestError('relation not found', { code: 'P2025', clientVersion: '4' });
+      prismaMock.dailyMarketBar.create.mockRejectedValue(p2025);
+      
+      let error: any;
+      try {
+        await repository.insert(baseCommand);
+      } catch (e: any) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(MarketDataIntegrityError);
+      expect(error.message).toBe('Daily market bar references missing persistence identity.');
+      expect(error.message).not.toContain('relation not found');
+      expect(error.message).not.toContain('P2025');
+    });
+
+    it('J. Other P2xxx -> MarketDataIntegrityError', async () => {
       const p2004 = new Prisma.PrismaClientKnownRequestError('other', { code: 'P2004', clientVersion: '4' });
       prismaMock.dailyMarketBar.create.mockRejectedValue(p2004);
       
-      await expect(repository.insert(baseCommand)).rejects.toThrowError(MarketDataIntegrityError);
-      await expect(repository.insert(baseCommand)).rejects.toThrowError('Database integrity error.');
+      let error: any;
+      try {
+        await repository.insert(baseCommand);
+      } catch (e: any) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(MarketDataIntegrityError);
+      expect(error.message).toBe('Database integrity error.');
+      expect(error.message).not.toContain('other');
+      expect(error.message).not.toContain('P2004');
     });
 
-    it('J. non-Prisma error -> Exact object identity preserved', async () => {
+    it('K. PrismaClientUnknownRequestError -> MarketDataIntegrityError', async () => {
+      const unknownPrismaError = new Prisma.PrismaClientUnknownRequestError('raw engine error check constraint', { clientVersion: '4' });
+      prismaMock.dailyMarketBar.create.mockRejectedValue(unknownPrismaError);
+      
+      let error: any;
+      try {
+        await repository.insert(baseCommand);
+      } catch (e: any) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(MarketDataIntegrityError);
+      expect(error.message).toBe('Database integrity error.');
+      expect(error.message).not.toContain('raw engine error');
+    });
+
+    it('L. non-Prisma error -> Exact object identity preserved', async () => {
       const genericError = new Error('Connection failed');
       prismaMock.dailyMarketBar.create.mockRejectedValue(genericError);
       
@@ -221,7 +268,7 @@ describe('PrismaDailyMarketBarRepository', () => {
       }
     });
 
-    it('K. mapper/domain error -> Exact error object identity preserved', async () => {
+    it('M. mapper/domain error -> Exact error object identity preserved', async () => {
       const cmd = { ...baseCommand, open: 'invalid-integer' }; // Will throw in mapper
       try {
         await repository.insert(cmd);

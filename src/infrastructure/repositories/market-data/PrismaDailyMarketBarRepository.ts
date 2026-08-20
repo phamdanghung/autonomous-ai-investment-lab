@@ -27,7 +27,7 @@ export class PrismaDailyMarketBarRepository implements
       });
       return record ? DailyMarketBarPrismaMappers.toDomain(record) : null;
     } catch (e: unknown) {
-      this.handlePrismaError(e);
+      this.handlePrismaError(e, 'READ');
       throw e;
     }
   }
@@ -51,7 +51,7 @@ export class PrismaDailyMarketBarRepository implements
       });
       return record ? DailyMarketBarPrismaMappers.toDomain(record) : null;
     } catch (e: unknown) {
-      this.handlePrismaError(e);
+      this.handlePrismaError(e, 'READ');
       throw e;
     }
   }
@@ -73,7 +73,7 @@ export class PrismaDailyMarketBarRepository implements
       });
       return record ? DailyMarketBarPrismaMappers.toDomain(record) : null;
     } catch (e: unknown) {
-      this.handlePrismaError(e);
+      this.handlePrismaError(e, 'READ');
       throw e;
     }
   }
@@ -85,7 +85,7 @@ export class PrismaDailyMarketBarRepository implements
       });
       return record ? DailyMarketBarPrismaMappers.toDomain(record) : null;
     } catch (e: unknown) {
-      this.handlePrismaError(e);
+      this.handlePrismaError(e, 'READ');
       throw e;
     }
   }
@@ -115,7 +115,7 @@ export class PrismaDailyMarketBarRepository implements
         status
       };
     } catch (e: unknown) {
-      this.handlePrismaError(e);
+      this.handlePrismaError(e, 'READ');
       throw e;
     }
   }
@@ -128,22 +128,29 @@ export class PrismaDailyMarketBarRepository implements
       });
       return DailyMarketBarPrismaMappers.toDomain(record);
     } catch (e: unknown) {
-      this.handlePrismaError(e);
+      this.handlePrismaError(e, 'INSERT');
       throw e;
     }
   }
 
-  private handlePrismaError(e: unknown): void {
+  private handlePrismaError(e: unknown, operation: 'READ' | 'INSERT'): void {
     if (e instanceof Prisma.PrismaClientKnownRequestError) {
-      if (e.code === 'P2002') {
-        throw new DailyMarketBarUniqueCollisionError();
+      if (operation === 'INSERT') {
+        if (e.code === 'P2002') {
+          throw new DailyMarketBarUniqueCollisionError();
+        }
+        if (e.code === 'P2003' || e.code === 'P2025') {
+          throw new MarketDataIntegrityError('Daily market bar references missing persistence identity.');
+        }
       }
-      if (e.code === 'P2003') {
-        throw new MarketDataIntegrityError('Daily market bar references missing persistence identity.');
-      }
+      
       if (e.code.startsWith('P2')) {
         throw new MarketDataIntegrityError('Database integrity error.');
       }
+    }
+    
+    if (e instanceof Prisma.PrismaClientUnknownRequestError) {
+      throw new MarketDataIntegrityError('Database integrity error.');
     }
   }
 }

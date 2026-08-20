@@ -403,9 +403,8 @@ describe('PrismaDailyMarketBarRepository Integration', () => {
       canonicalHash: 'canon-hash-fk'
     };
     
-    // Asserting the actual observed defect (P2025 caught as generic Database integrity error)
     await expect(dailyRepo.insert(cmd)).rejects.toThrowError(MarketDataIntegrityError);
-    await expect(dailyRepo.insert(cmd)).rejects.toThrowError('Database integrity error.');
+    await expect(dailyRepo.insert(cmd)).rejects.toThrowError('Daily market bar references missing persistence identity.');
   });
 
   it('TEST 12 - REAL QUALITY CHECK CONSTRAINT', async () => {
@@ -426,9 +425,8 @@ describe('PrismaDailyMarketBarRepository Integration', () => {
       canonicalHash: 'canon-hash-chk'
     };
     
-    // Asserting the actual observed defect (PrismaClientUnknownRequestError)
-    await expect(dailyRepo.insert(cmd)).rejects.toThrowError();
-    await expect(dailyRepo.insert(cmd)).rejects.not.toThrowError(MarketDataIntegrityError);
+    await expect(dailyRepo.insert(cmd)).rejects.toThrowError(MarketDataIntegrityError);
+    await expect(dailyRepo.insert(cmd)).rejects.toThrowError('Database integrity error.');
   });
 
   it('TEST 13 - CORRECTION CHECK CONSTRAINT', async () => {
@@ -448,9 +446,8 @@ describe('PrismaDailyMarketBarRepository Integration', () => {
       canonicalHash: 'canon-hash-chk2'
     };
     
-    // Asserting the actual observed defect (PrismaClientUnknownRequestError)
-    await expect(dailyRepo.insert(cmd)).rejects.toThrowError();
-    await expect(dailyRepo.insert(cmd)).rejects.not.toThrowError(MarketDataIntegrityError);
+    await expect(dailyRepo.insert(cmd)).rejects.toThrowError(MarketDataIntegrityError);
+    await expect(dailyRepo.insert(cmd)).rejects.toThrowError('Database integrity error.');
   });
 
   it('TEST 14 - REAL APPEND-ONLY UPDATE TRIGGER', async () => {
