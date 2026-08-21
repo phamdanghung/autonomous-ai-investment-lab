@@ -129,6 +129,19 @@ export class MarketImportNotFoundError extends MarketDataDomainError {
   }
 }
 
+// ----------------- DATASET SNAPSHOT ERRORS -----------------
+export class DatasetSnapshotInvalidError extends MarketDataDomainError {
+  constructor(message: string = 'Dataset snapshot contains invalid data.') {
+    super(message, 'DATASET_SNAPSHOT_INVALID', 'The provided dataset snapshot data is invalid.', 'VALIDATION', false);
+  }
+}
+
+export class DatasetSnapshotInvalidTransitionError extends MarketDataDomainError {
+  constructor(message: string = 'Invalid DatasetSnapshot lifecycle transition.') {
+    super(message, 'DATASET_SNAPSHOT_INVALID_TRANSITION', 'The requested dataset snapshot operation is invalid for its current state.', 'BUSINESS_RULE', false);
+  }
+}
+
 // ----------------- GENERIC / SYSTEM ERRORS -----------------
 const MARKET_DATA_CONCURRENCY_MESSAGE = 'Concurrent market-data operation conflict.';
 
