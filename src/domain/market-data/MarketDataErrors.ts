@@ -142,6 +142,12 @@ export class DatasetSnapshotInvalidTransitionError extends MarketDataDomainError
   }
 }
 
+export class DatasetSnapshotIdempotencyConflictError extends MarketDataDomainError {
+  constructor(message: string = 'Dataset snapshot idempotency key reused with different request payload.') {
+    super(message, 'DATASET_SNAPSHOT_IDEMPOTENCY_CONFLICT', 'This snapshot request has already been processed with different data.', 'CONFLICT', false);
+  }
+}
+
 // ----------------- GENERIC / SYSTEM ERRORS -----------------
 const MARKET_DATA_CONCURRENCY_MESSAGE = 'Concurrent market-data operation conflict.';
 

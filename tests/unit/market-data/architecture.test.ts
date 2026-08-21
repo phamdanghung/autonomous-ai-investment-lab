@@ -43,6 +43,7 @@ describe('MarketDataArchitecture', () => {
     const fileBasenames = allFiles.map(f => path.basename(f)).sort();
     expect(fileBasenames).toEqual([
       'DailyMarketBar.ts',
+      'DatasetSnapshot.ts',
       'MarketDataCanonicalization.ts',
       'MarketDataErrors.ts',
       'MarketDataImportBatch.ts',
