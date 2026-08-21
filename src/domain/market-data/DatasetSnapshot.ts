@@ -6,12 +6,14 @@ import {
   CanonicalSnapshotManifestPayload,
   CanonicalUniversePayload,
   MARKET_DATA_CONTRACT_VERSIONS,
+  MARKET_EXCHANGES,
   MarketExchange,
   SecurityType
 } from '../contracts/MarketDataContracts';
 import { MarketDataCanonicalization } from './MarketDataCanonicalization';
 import { DatasetSnapshotInvalidError, DatasetSnapshotInvalidTransitionError } from './MarketDataErrors';
 import { MarketDataValidation } from './MarketDataValidation';
+import { MarketInstrumentDomain } from './MarketInstrument';
 
 export type DatasetSnapshotStatus = 'DRAFT' | 'SEALED';
 
@@ -67,7 +69,10 @@ export class DatasetSnapshotDomain {
   }
 
   private static validateInstrumentBusinessKey(key: string): void {
-    // VN|EXCHANGE|CANONICAL_SYMBOL|SECURITY_TYPE|YYYY-MM-DD
+    if (typeof key !== 'string') {
+      throw new DatasetSnapshotInvalidError('Instrument business key must be a string');
+    }
+
     const parts = key.split('|');
     if (parts.length !== 5) {
       throw new DatasetSnapshotInvalidError(`Invalid instrument business key format: ${key}`);
@@ -76,16 +81,28 @@ export class DatasetSnapshotDomain {
     if (prefix !== 'VN') {
       throw new DatasetSnapshotInvalidError(`Invalid instrument business key prefix: ${prefix}`);
     }
-    if (!['HOSE', 'HNX', 'UPCOM'].includes(exchange)) {
-      throw new DatasetSnapshotInvalidError(`Invalid instrument business key exchange: ${exchange}`);
-    }
     if (type !== 'EQUITY') {
       throw new DatasetSnapshotInvalidError(`Invalid instrument business key security type: ${type}`);
     }
-    if (!symbol || !/^[A-Z0-9]+$/.test(symbol)) {
-      throw new DatasetSnapshotInvalidError(`Invalid instrument business key symbol: ${symbol}`);
+    if (!MARKET_EXCHANGES.includes(exchange as any)) {
+      throw new DatasetSnapshotInvalidError(`Invalid instrument business key exchange: ${exchange}`);
     }
-    this.validateDate(date);
+
+    try {
+      const expectedKey = MarketInstrumentDomain.buildBusinessKey(
+        exchange as MarketExchange,
+        symbol,
+        'EQUITY',
+        date
+      );
+
+      if (expectedKey !== key) {
+        throw new DatasetSnapshotInvalidError(`Instrument business key is not strictly canonical. Expected: ${expectedKey}, got: ${key}`);
+      }
+    } catch (e: any) {
+      if (e instanceof DatasetSnapshotInvalidError) throw e;
+      throw new DatasetSnapshotInvalidError(`Invalid instrument business key: ${e.message}`);
+    }
   }
 
   static buildUniverse(

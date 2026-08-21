@@ -79,6 +79,56 @@ describe('DatasetSnapshotDomain', () => {
         securityTypes: ['EQUITY'], exchanges: ['HOSE'], instrumentBusinessKeys: [], qualityFlagAllowlist: [' A'] // Leading space
       })).toThrow(DatasetSnapshotInvalidError);
     });
+
+    it('should explicitly reject noncanonical instrument business keys in Universe', () => {
+      const buildU = (key: string) => DatasetSnapshotDomain.buildUniverse({
+        securityTypes: ['EQUITY'], exchanges: ['HOSE'], instrumentBusinessKeys: [key], qualityFlagAllowlist: []
+      });
+
+      // A. 21-character symbol rejected
+      try {
+        buildU('VN|HOSE|ABCDEFGHIJKLMNOPQRSTU|EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // B. lowercase symbol rejected
+      try {
+        buildU('VN|HOSE|vcb|EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // C. leading/trailing symbol whitespace rejected
+      try {
+        buildU('VN|HOSE| VCB|EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+      try {
+        buildU('VN|HOSE|VCB |EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // D. noncanonical date rejected
+      try {
+        buildU('VN|HOSE|VCB|EQUITY|2023-1-1');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // E. valid 20-character symbol accepted
+      expect(() => buildU('VN|HOSE|ABCDEFGHIJKLMNOPQRST|EQUITY|2023-01-01')).not.toThrow();
+
+      // F. valid ordinary canonical key accepted
+      expect(() => buildU('VN|HOSE|VCB|EQUITY|2023-01-01')).not.toThrow();
+    });
   });
 
   describe('B. DATA CUTOFF', () => {
@@ -203,6 +253,59 @@ describe('DatasetSnapshotDomain', () => {
       expect(() => DatasetSnapshotDomain.buildEntryHash({ ...valid, instrumentBusinessKey: 'INVALID' })).toThrow(DatasetSnapshotInvalidError);
       expect(() => DatasetSnapshotDomain.buildEntryHash({ ...valid, marketDate: '2023-13-01' })).toThrow(DatasetSnapshotInvalidError);
       expect(() => DatasetSnapshotDomain.buildEntryHash({ ...valid, barCanonicalHash: 'not-hash' })).toThrow(DatasetSnapshotInvalidError);
+    });
+
+    it('should explicitly reject noncanonical instrument business keys in EntryHash', () => {
+      const buildE = (key: string) => DatasetSnapshotDomain.buildEntryHash({
+        entrySequence: 1,
+        instrumentBusinessKey: key,
+        marketDate: '2023-01-01',
+        barCanonicalHash: dummyHash64
+      });
+
+      // A. 21-character symbol rejected
+      try {
+        buildE('VN|HOSE|ABCDEFGHIJKLMNOPQRSTU|EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // B. lowercase symbol rejected
+      try {
+        buildE('VN|HOSE|vcb|EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // C. leading/trailing symbol whitespace rejected
+      try {
+        buildE('VN|HOSE| VCB|EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+      try {
+        buildE('VN|HOSE|VCB |EQUITY|2023-01-01');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // D. noncanonical date rejected
+      try {
+        buildE('VN|HOSE|VCB|EQUITY|2023-1-1');
+        expect.fail('Should throw');
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatasetSnapshotInvalidError);
+      }
+
+      // E. valid 20-character symbol accepted
+      expect(() => buildE('VN|HOSE|ABCDEFGHIJKLMNOPQRST|EQUITY|2023-01-01')).not.toThrow();
+
+      // F. valid ordinary canonical key accepted
+      expect(() => buildE('VN|HOSE|VCB|EQUITY|2023-01-01')).not.toThrow();
     });
   });
 
