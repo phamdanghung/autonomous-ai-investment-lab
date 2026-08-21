@@ -13,7 +13,8 @@ import {
   IDatasetSnapshotQueryRepository,
   IDatasetSnapshotWriteRepository,
   CreateSealedDatasetSnapshotCommand,
-  DatasetSnapshotUniqueCollisionError
+  DatasetSnapshotUniqueCollisionError,
+  DatasetSnapshotBarCandidate
 } from '../../ports/market-data/DatasetSnapshotPorts';
 import { GetMarketDataSourceVersionService } from './source-version/GetMarketDataSourceVersionService';
 
@@ -44,7 +45,7 @@ export class CreateDatasetSnapshotService {
 
   async execute(request: CreateDatasetSnapshotRequest): Promise<CreateDatasetSnapshotResult> {
     this.validateIdempotencyKey(request.creationIdempotencyKey);
-    
+
     const universeResult = DatasetSnapshotDomain.buildUniverse({
       securityTypes: request.universe.securityTypes,
       exchanges: request.universe.exchanges,
@@ -53,16 +54,6 @@ export class CreateDatasetSnapshotService {
     });
 
     const sourceVersion = await this.getSourceVersion.execute({ sourceKey: request.sourceVersionKey });
-
-    const emptyDataCutoffKey = DatasetSnapshotDomain.buildDataCutoff({ batches: [] }).key;
-    DatasetSnapshotDomain.buildBusinessKey({
-      sourceVersionKey: request.sourceVersionKey,
-      rangeStart: request.rangeStart,
-      rangeEnd: request.rangeEnd,
-      universeHash: universeResult.hash,
-      dataCutoffKey: emptyDataCutoffKey,
-      canonicalizationVersion: sourceVersion.canonicalizationVersion
-    });
 
     const creationRequestPayload = {
       requestContractVersion: DATASET_SNAPSHOT_CREATION_REQUEST_VERSION,
@@ -74,28 +65,7 @@ export class CreateDatasetSnapshotService {
     };
     const creationRequestHash = MarketDataCanonicalization.hashPayload(creationRequestPayload);
 
-    try {
-      return await this.performWorkflow(request, universeResult, sourceVersion, creationRequestHash);
-    } catch (e: any) {
-      if (e instanceof DatasetSnapshotUniqueCollisionError) {
-        return await this.recoverUniqueCollision(request, universeResult, sourceVersion, creationRequestHash);
-      }
-      throw e;
-    }
-  }
-
-  private validateIdempotencyKey(key: string) {
-    if (typeof key !== 'string' || key.length === 0 || key.trim() !== key || /[\x00-\x1F\x7F]/.test(key)) {
-      throw new DatasetSnapshotInvalidError('Invalid idempotency key.');
-    }
-  }
-
-  private async performWorkflow(
-    request: CreateDatasetSnapshotRequest,
-    universeResult: any,
-    sourceVersion: any,
-    creationRequestHash: string
-  ): Promise<CreateDatasetSnapshotResult> {
+    // 1. Exact Idempotency Replay (First)
     const existing = await this.queryRepo.findByCreationIdempotencyKey(request.creationIdempotencyKey);
     if (existing) {
       if (existing.creationRequestHash !== creationRequestHash) {
@@ -105,6 +75,7 @@ export class CreateDatasetSnapshotService {
       return { outcome: 'REPLAYED', snapshot: existing };
     }
 
+    // 2. Cutoff point
     const dataCutoffAt = this.clock.now();
     const batches = await this.importBatchQuery.listCompletedThrough(sourceVersion.id, dataCutoffAt);
 
@@ -133,13 +104,8 @@ export class CreateDatasetSnapshotService {
 
     const finalBusinessKey = businessKeyResult.businessKey;
 
-    const existingByKey = await this.queryRepo.findByBusinessKey(finalBusinessKey);
-    if (existingByKey) {
-      this.verifyBusinessKeyIntegrity(existingByKey, request, universeResult, sourceVersion, dataCutoffResult, finalBusinessKey, creationRequestHash);
-      return { outcome: 'REPLAYED', snapshot: existingByKey };
-    }
-
-    let candidates: any[] = [];
+    // 3. Candidate Query & Integrity
+    let candidates: DatasetSnapshotBarCandidate[] = [];
     if (batches.length > 0) {
       candidates = await this.dailyBarQuery.listCandidates({
         sourceVersionId: sourceVersion.id,
@@ -167,16 +133,17 @@ export class CreateDatasetSnapshotService {
       }
     });
 
-    const groups = new Map<string, any[]>();
+    // 4. Correction Chain Selection
+    const groups = new Map<string, DatasetSnapshotBarCandidate[]>();
     candidates.forEach(c => {
       const key = `${c.instrumentBusinessKey}|${c.bar.marketDate}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(c);
     });
 
-    const currents: any[] = [];
+    const currents: DatasetSnapshotBarCandidate[] = [];
     for (const group of groups.values()) {
-      group.sort((a: any, b: any) => a.bar.correctionVersion - b.bar.correctionVersion);
+      group.sort((a, b) => a.bar.correctionVersion - b.bar.correctionVersion);
       if (group[0].bar.correctionVersion !== 0) throw new MarketDataIntegrityError('Dataset snapshot eligible correction chain is inconsistent.');
       let prevId: string | null = null;
       let instId = group[0].bar.instrumentId;
@@ -196,11 +163,12 @@ export class CreateDatasetSnapshotService {
       currents.push(group[group.length - 1]);
     }
 
+    // 5. Universe + Quality Selection
     const allowedSecurityTypes = new Set(universeResult.payload.securityTypes);
     const allowedExchanges = new Set(universeResult.payload.exchanges);
     const allowedKeys = new Set(universeResult.payload.instrumentBusinessKeys);
     const emptyKeys = universeResult.payload.instrumentBusinessKeys.length === 0;
-    
+
     let selected = currents;
     if (universeResult.payload.exchanges.length === 0) {
       selected = [];
@@ -209,13 +177,13 @@ export class CreateDatasetSnapshotService {
         const parts = c.instrumentBusinessKey.split('|');
         const exchange = parts[1];
         const type = parts[3];
-        if (!allowedExchanges.has(exchange)) return false;
-        if (!allowedSecurityTypes.has(type)) return false;
+        if (!allowedExchanges.has(exchange as any)) return false;
+        if (!allowedSecurityTypes.has(type as any)) return false;
         if (!emptyKeys && !allowedKeys.has(c.instrumentBusinessKey)) return false;
 
-        if (c.bar.qualityStatus === 'QUARANTINED') return false;
-        if (c.bar.qualityStatus === 'ACCEPTED_WITH_FLAGS') {
-          if (!universeResult.payload.qualityFlagAllowlist.includes(c.bar.qualityFlags)) {
+        if (c.bar.qualityDecision === 'QUARANTINED') return false;
+        if (c.bar.qualityDecision === 'ACCEPTED_WITH_FLAGS') {
+          if (!universeResult.payload.qualityFlagAllowlist.includes(c.bar.qualityFlags || '')) {
             return false;
           }
         }
@@ -223,6 +191,7 @@ export class CreateDatasetSnapshotService {
       });
     }
 
+    // 6. Deterministic Entries
     selected.sort((a, b) => {
       if (a.instrumentBusinessKey < b.instrumentBusinessKey) return -1;
       if (a.instrumentBusinessKey > b.instrumentBusinessKey) return 1;
@@ -249,14 +218,34 @@ export class CreateDatasetSnapshotService {
       };
     });
 
+    // 7. Content Hashes
+    const rowCount = entries.length;
     const manifestResult = DatasetSnapshotDomain.buildManifestHash(entries.map(e => e.entryHash));
     const contentResult = DatasetSnapshotDomain.buildContentHash({
       businessKey: finalBusinessKey,
-      rowCount: entries.length,
+      rowCount: rowCount,
       manifestHash: manifestResult.manifestHash
     });
 
-    const sealedAt = this.clock.now();
+    // 8. Business-Key Preflight (MUST occur AFTER content hashing)
+    const existingByKey = await this.queryRepo.findByBusinessKey(finalBusinessKey);
+    if (existingByKey) {
+      this.verifyBusinessKeyIntegrity(
+        existingByKey,
+        request,
+        universeResult,
+        sourceVersion,
+        dataCutoffResult,
+        finalBusinessKey,
+        creationRequestHash,
+        rowCount,
+        manifestResult.manifestHash,
+        contentResult.contentHash
+      );
+      return { outcome: 'REPLAYED', snapshot: existingByKey };
+    }
+
+    // 9. Persistence
     DatasetSnapshotDomain.validateTransition('DRAFT', 'SEALED');
 
     const draft = {
@@ -269,7 +258,7 @@ export class CreateDatasetSnapshotService {
       dataCutoffKey: dataCutoffResult.key,
       dataCutoffAt: dataCutoffAt,
       canonicalizationVersion: sourceVersion.canonicalizationVersion,
-      rowCount: entries.length,
+      rowCount: rowCount,
       manifestHash: manifestResult.manifestHash,
       contentHash: contentResult.contentHash,
       status: 'DRAFT' as const,
@@ -277,33 +266,67 @@ export class CreateDatasetSnapshotService {
       creationRequestHash: creationRequestHash
     };
 
-    const created = await this.writeRepo.createSealed({ draft, entries, sealedAt });
-    
-    if (
-      created.status !== 'SEALED' ||
-      created.sealedAt === null ||
-      created.businessKey !== draft.businessKey ||
-      created.sourceVersionId !== draft.sourceVersionId ||
-      created.rangeStart !== draft.rangeStart ||
-      created.rangeEnd !== draft.rangeEnd ||
-      created.universeDefinitionJson !== draft.universeDefinitionJson ||
-      created.universeHash !== draft.universeHash ||
-      created.dataCutoffKey !== draft.dataCutoffKey ||
-      created.canonicalizationVersion !== draft.canonicalizationVersion ||
-      created.rowCount !== draft.rowCount ||
-      created.manifestHash !== draft.manifestHash ||
-      created.contentHash !== draft.contentHash ||
-      created.creationIdempotencyKey !== draft.creationIdempotencyKey ||
-      created.creationRequestHash !== draft.creationRequestHash ||
-      created.dataCutoffAt?.getTime() !== draft.dataCutoffAt?.getTime()
-    ) {
-      throw new MarketDataIntegrityError('Dataset snapshot persistence returned inconsistent content.');
-    }
+    try {
+      const sealedAt = this.clock.now();
+      const created = await this.writeRepo.createSealed({ draft, entries, sealedAt });
 
-    return { outcome: 'CREATED', snapshot: created };
+      if (
+        created.status !== 'SEALED' ||
+        created.sealedAt === null ||
+        created.businessKey !== draft.businessKey ||
+        created.sourceVersionId !== draft.sourceVersionId ||
+        created.rangeStart !== draft.rangeStart ||
+        created.rangeEnd !== draft.rangeEnd ||
+        created.universeDefinitionJson !== draft.universeDefinitionJson ||
+        created.universeHash !== draft.universeHash ||
+        created.dataCutoffKey !== draft.dataCutoffKey ||
+        created.canonicalizationVersion !== draft.canonicalizationVersion ||
+        created.rowCount !== draft.rowCount ||
+        created.manifestHash !== draft.manifestHash ||
+        created.contentHash !== draft.contentHash ||
+        created.creationIdempotencyKey !== draft.creationIdempotencyKey ||
+        created.creationRequestHash !== draft.creationRequestHash ||
+        created.dataCutoffAt?.getTime() !== draft.dataCutoffAt?.getTime()
+      ) {
+        throw new MarketDataIntegrityError('Dataset snapshot persistence returned inconsistent content.');
+      }
+
+      return { outcome: 'CREATED', snapshot: created };
+    } catch (e: any) {
+      if (e instanceof DatasetSnapshotUniqueCollisionError) {
+        return await this.recoverUniqueCollision(
+          request,
+          universeResult,
+          sourceVersion,
+          creationRequestHash,
+          finalBusinessKey,
+          dataCutoffResult.key,
+          rowCount,
+          manifestResult.manifestHash,
+          contentResult.contentHash
+        );
+      }
+      throw e;
+    }
   }
 
-  private async recoverUniqueCollision(request: CreateDatasetSnapshotRequest, universeResult: any, sourceVersion: any, creationRequestHash: string): Promise<CreateDatasetSnapshotResult> {
+  private validateIdempotencyKey(key: string) {
+    if (typeof key !== 'string' || key.length === 0 || key.trim() !== key || /[\x00-\x1F\x7F]/.test(key)) {
+      throw new DatasetSnapshotInvalidError('Invalid idempotency key.');
+    }
+  }
+
+  private async recoverUniqueCollision(
+    request: CreateDatasetSnapshotRequest,
+    universeResult: any,
+    sourceVersion: any,
+    creationRequestHash: string,
+    finalBusinessKey: string,
+    dataCutoffKey: string,
+    rowCount: number,
+    manifestHash: string,
+    contentHash: string
+  ): Promise<CreateDatasetSnapshotResult> {
     const existing = await this.queryRepo.findByCreationIdempotencyKey(request.creationIdempotencyKey);
     if (existing) {
       if (existing.creationRequestHash !== creationRequestHash) {
@@ -313,24 +336,20 @@ export class CreateDatasetSnapshotService {
       return { outcome: 'REPLAYED', snapshot: existing };
     }
 
-    const dataCutoffAt = this.clock.now();
-    const batches = await this.importBatchQuery.listCompletedThrough(sourceVersion.id, dataCutoffAt);
-    const cutoffPayload = batches.map(b => ({ batchBusinessKey: b.batchBusinessKey, sourceContentHash: b.sourceContentHash }));
-    const dataCutoffResult = DatasetSnapshotDomain.buildDataCutoff({ batches: cutoffPayload });
-
-    const businessKeyResult = DatasetSnapshotDomain.buildBusinessKey({
-      sourceVersionKey: request.sourceVersionKey,
-      rangeStart: request.rangeStart,
-      rangeEnd: request.rangeEnd,
-      universeHash: universeResult.hash,
-      dataCutoffKey: dataCutoffResult.key,
-      canonicalizationVersion: sourceVersion.canonicalizationVersion
-    });
-
-    const finalBusinessKey = businessKeyResult.businessKey;
     const existingByKey = await this.queryRepo.findByBusinessKey(finalBusinessKey);
     if (existingByKey) {
-      this.verifyBusinessKeyIntegrity(existingByKey, request, universeResult, sourceVersion, dataCutoffResult, finalBusinessKey, creationRequestHash);
+      this.verifyBusinessKeyIntegrity(
+        existingByKey,
+        request,
+        universeResult,
+        sourceVersion,
+        { key: dataCutoffKey },
+        finalBusinessKey,
+        creationRequestHash,
+        rowCount,
+        manifestHash,
+        contentHash
+      );
       return { outcome: 'REPLAYED', snapshot: existingByKey };
     }
 
@@ -376,7 +395,18 @@ export class CreateDatasetSnapshotService {
     }
   }
 
-  private verifyBusinessKeyIntegrity(existing: DatasetSnapshot, request: CreateDatasetSnapshotRequest, universeResult: any, sourceVersion: any, dataCutoffResult: any, finalBusinessKey: string, creationRequestHash: string) {
+  private verifyBusinessKeyIntegrity(
+    existing: DatasetSnapshot,
+    request: CreateDatasetSnapshotRequest,
+    universeResult: any,
+    sourceVersion: any,
+    dataCutoffResult: any,
+    finalBusinessKey: string,
+    creationRequestHash: string,
+    currentRowCount: number,
+    currentManifestHash: string,
+    currentContentHash: string
+  ) {
     if (
       existing.businessKey !== finalBusinessKey ||
       existing.sourceVersionId !== sourceVersion.id ||
@@ -387,20 +417,13 @@ export class CreateDatasetSnapshotService {
       existing.dataCutoffKey !== dataCutoffResult.key ||
       existing.canonicalizationVersion !== sourceVersion.canonicalizationVersion ||
       existing.creationRequestHash !== creationRequestHash ||
+      existing.rowCount !== currentRowCount ||
+      existing.manifestHash !== currentManifestHash ||
+      existing.contentHash !== currentContentHash ||
       existing.status !== 'SEALED' ||
       existing.sealedAt === null ||
       existing.dataCutoffAt === null
     ) {
-      throw new MarketDataIntegrityError('Dataset snapshot business key resolves to inconsistent content.');
-    }
-
-    const recomputedContent = DatasetSnapshotDomain.buildContentHash({
-      businessKey: existing.businessKey,
-      rowCount: existing.rowCount,
-      manifestHash: existing.manifestHash
-    });
-
-    if (recomputedContent.contentHash !== existing.contentHash) {
       throw new MarketDataIntegrityError('Dataset snapshot business key resolves to inconsistent content.');
     }
   }
