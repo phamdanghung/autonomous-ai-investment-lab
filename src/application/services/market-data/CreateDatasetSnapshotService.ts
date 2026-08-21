@@ -55,6 +55,19 @@ export class CreateDatasetSnapshotService {
 
     const sourceVersion = await this.getSourceVersion.execute({ sourceKey: request.sourceVersionKey });
 
+    const validationDataCutoffKey = DatasetSnapshotDomain.buildDataCutoff({
+      batches: []
+    }).key;
+
+    DatasetSnapshotDomain.buildBusinessKey({
+      sourceVersionKey: request.sourceVersionKey,
+      rangeStart: request.rangeStart,
+      rangeEnd: request.rangeEnd,
+      universeHash: universeResult.hash,
+      dataCutoffKey: validationDataCutoffKey,
+      canonicalizationVersion: sourceVersion.canonicalizationVersion
+    });
+
     const creationRequestPayload = {
       requestContractVersion: DATASET_SNAPSHOT_CREATION_REQUEST_VERSION,
       sourceVersionKey: request.sourceVersionKey,

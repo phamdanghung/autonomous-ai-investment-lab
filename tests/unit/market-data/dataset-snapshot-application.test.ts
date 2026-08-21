@@ -64,6 +64,44 @@ describe('DatasetSnapshot Application Service', () => {
         .rejects.toThrow(DatasetSnapshotInvalidError);
     });
 
+    describe('INVALID RANGE TESTS BEFORE IDEMPOTENCY', () => {
+      beforeEach(() => {
+        getSourceVersion.execute.mockResolvedValue(dummySourceVersion);
+      });
+
+      const verifyDownstreamNotCalled = () => {
+        expect(queryRepo.findByCreationIdempotencyKey).not.toHaveBeenCalled();
+        expect(clock.now).not.toHaveBeenCalled();
+        expect(importBatchQuery.listCompletedThrough).not.toHaveBeenCalled();
+        expect(dailyBarQuery.listCandidates).not.toHaveBeenCalled();
+        expect(writeRepo.createSealed).not.toHaveBeenCalled();
+      };
+
+      it('A. noncanonical rangeStart', async () => {
+        await expect(service.execute({ ...validReq, rangeStart: '2023-1-01' }))
+          .rejects.toThrow(DatasetSnapshotInvalidError);
+        verifyDownstreamNotCalled();
+      });
+
+      it('B. impossible date', async () => {
+        await expect(service.execute({ ...validReq, rangeStart: '2023-02-30' }))
+          .rejects.toThrow(DatasetSnapshotInvalidError);
+        verifyDownstreamNotCalled();
+      });
+
+      it('C. rangeEnd < rangeStart', async () => {
+        await expect(service.execute({ ...validReq, rangeStart: '2023-12-31', rangeEnd: '2023-01-01' }))
+          .rejects.toThrow(DatasetSnapshotInvalidError);
+        verifyDownstreamNotCalled();
+      });
+
+      it('D. leading/trailing whitespace date', async () => {
+        await expect(service.execute({ ...validReq, rangeStart: ' 2023-01-01' }))
+          .rejects.toThrow(DatasetSnapshotInvalidError);
+        verifyDownstreamNotCalled();
+      });
+    });
+
     it('hard-coded fixed creationRequestHash vector', async () => {
       getSourceVersion.execute.mockResolvedValue(dummySourceVersion);
       queryRepo.findByCreationIdempotencyKey.mockResolvedValue(null);
