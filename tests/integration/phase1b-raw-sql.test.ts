@@ -385,14 +385,23 @@ describe('Phase 1B Raw SQL Invariant Tests', () => {
     it('32. DRAFT -> SEALED hợp lệ được phép', async () => {
       const id = getUuid();
       await insertSnap(id, `'2024-01-01', '2024-01-02', '{}', 'h', 'c', '${ts}'`);
-      await expect(prisma.$executeRawUnsafe(`UPDATE "DatasetSnapshot" SET "status" = 'SEALED', "sealedAt" = '${ts}', "rowCount" = 1 WHERE "id" = '${id}'`)).resolves.not.toThrow();
+      await expect(prisma.$executeRawUnsafe(`UPDATE "DatasetSnapshot" SET "status" = 'SEALED', "sealedAt" = '${ts}' WHERE "id" = '${id}'`)).resolves.not.toThrow();
+
+      const snap = await prisma.$queryRawUnsafe<any[]>(`SELECT "status", "sealedAt", "rowCount" FROM "DatasetSnapshot" WHERE "id" = '${id}'`);
+      expect(snap[0].status).toBe('SEALED');
+      expect(snap[0].sealedAt).not.toBeNull();
+      expect(Number(snap[0].rowCount)).toBe(0);
     });
 
     it('33. SEALED update bị từ chối', async () => {
       const id = getUuid();
       await insertSnap(id, `'2024-01-01', '2024-01-02', '{}', 'h', 'c', '${ts}'`);
-      await prisma.$executeRawUnsafe(`UPDATE "DatasetSnapshot" SET "status" = 'SEALED', "sealedAt" = '${ts}', "rowCount" = 1 WHERE "id" = '${id}'`);
+      await prisma.$executeRawUnsafe(`UPDATE "DatasetSnapshot" SET "status" = 'SEALED', "sealedAt" = '${ts}' WHERE "id" = '${id}'`);
       await expect(prisma.$executeRawUnsafe(`UPDATE "DatasetSnapshot" SET "rowCount" = 2 WHERE "id" = '${id}'`)).rejects.toThrow();
+
+      const snap = await prisma.$queryRawUnsafe<any[]>(`SELECT "status", "rowCount" FROM "DatasetSnapshot" WHERE "id" = '${id}'`);
+      expect(snap[0].status).toBe('SEALED');
+      expect(Number(snap[0].rowCount)).toBe(0);
     });
 
     it('34. Snapshot DELETE bị từ chối', async () => {
