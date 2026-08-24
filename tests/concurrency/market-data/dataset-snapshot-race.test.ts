@@ -353,8 +353,10 @@ describe('DatasetSnapshot Race Conditions', () => {
 
     const snaps = await assertFinalState(prismaA, 1, 2);
     
-    const winnerIdem = snaps[0].creationIdempotencyKey;
-    expect(['race-e2-a', 'race-e2-b']).toContain(winnerIdem);
+    const createdIndex = vals.findIndex(v => v.outcome === 'CREATED');
+    expect(createdIndex).toBeGreaterThanOrEqual(0);
+    const expectedWinnerIdem = createdIndex === 0 ? reqA.creationIdempotencyKey : reqB.creationIdempotencyKey;
+    expect(snaps[0].creationIdempotencyKey).toBe(expectedWinnerIdem);
   });
 
   it('RACE E3 — SAME IDEMPOTENCY / DIFFERENT REQUEST HASH', async () => {
