@@ -94,6 +94,18 @@ export const simulationRunCommandRepository: ISimulationRunCommandRepository = {
         return { run, event };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
     } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const target = (error.meta || {}).target;
+        let isIdempotencyKey = false;
+        if (typeof target === 'string') {
+          isIdempotencyKey = target.includes('idempotencyKey');
+        } else if (Array.isArray(target)) {
+          isIdempotencyKey = target.some((t: any) => typeof t === 'string' && t.includes('idempotencyKey'));
+        }
+        if (isIdempotencyKey) {
+          throw new RunVersionConflictError();
+        }
+      }
       throw error;
     }
   },
