@@ -1,10 +1,10 @@
-import { BindDataOriginService } from '../../../application/services/BindDataOriginService';
 import { 
   ISimulationRunDataOriginBinder, 
   BindSimulationRunDataOriginCommand,
   BoundSimulationRunDataOrigin 
 } from '../../../application/ports/run-data-origin/RunDataOriginPorts';
 import { MarketDataDomainError } from '../../../domain/market-data/MarketDataErrors';
+import { MarketDataValidation } from '../../../domain/market-data/MarketDataValidation';
 
 export interface LegacyBindDataOriginExecutor {
   execute(
@@ -19,8 +19,17 @@ export interface LegacyBindDataOriginExecutor {
       type: string;
       id: string;
     }
-  ): Promise<any>;
+  ): Promise<unknown>;
 }
+
+const defaultLegacyBindDataOriginExecutor: LegacyBindDataOriginExecutor = {
+  async execute(runId, version, dto, actor) {
+    const { BindDataOriginService } = await import(
+      '../../../application/services/BindDataOriginService'
+    );
+    return BindDataOriginService.execute(runId, version, dto, actor);
+  }
+};
 
 export class LegacySimulationRunDataOriginBinderIntegrityError extends MarketDataDomainError {
   constructor(message: string = 'Legacy simulation run data-origin binding result is invalid.') {
@@ -36,11 +45,11 @@ export class LegacySimulationRunDataOriginBinderIntegrityError extends MarketDat
 
 export class LegacySimulationRunDataOriginBinder implements ISimulationRunDataOriginBinder {
   constructor(
-    private readonly executor: LegacyBindDataOriginExecutor = BindDataOriginService
+    private readonly executor: LegacyBindDataOriginExecutor = defaultLegacyBindDataOriginExecutor
   ) {}
 
   async bind(command: BindSimulationRunDataOriginCommand): Promise<BoundSimulationRunDataOrigin> {
-    const result = await this.executor.execute(
+    const rawResult = await this.executor.execute(
       command.runId,
       command.expectedVersion,
       {
@@ -54,17 +63,19 @@ export class LegacySimulationRunDataOriginBinder implements ISimulationRunDataOr
       }
     );
 
-    if (!result || typeof result !== 'object') {
+    if (rawResult === null || typeof rawResult !== 'object' || Array.isArray(rawResult)) {
       throw new LegacySimulationRunDataOriginBinderIntegrityError();
     }
+
+    const result = rawResult as Record<string, unknown>;
 
     const { id, version, status, dataOriginHash, canonicalStartDate, runBusinessKey } = result;
 
-    if (id !== command.runId) {
+    if (typeof id !== 'string' || id !== command.runId) {
       throw new LegacySimulationRunDataOriginBinderIntegrityError();
     }
 
-    if (version !== command.expectedVersion + 1) {
+    if (typeof version !== 'number' || !Number.isInteger(version) || version !== command.expectedVersion + 1) {
       throw new LegacySimulationRunDataOriginBinderIntegrityError();
     }
 
@@ -72,7 +83,7 @@ export class LegacySimulationRunDataOriginBinder implements ISimulationRunDataOr
       throw new LegacySimulationRunDataOriginBinderIntegrityError();
     }
 
-    if (dataOriginHash !== command.dataOriginHash) {
+    if (typeof dataOriginHash !== 'string' || dataOriginHash !== command.dataOriginHash) {
       throw new LegacySimulationRunDataOriginBinderIntegrityError();
     }
 
@@ -83,6 +94,15 @@ export class LegacySimulationRunDataOriginBinder implements ISimulationRunDataOr
       }
       parsedCanonicalStart = canonicalStartDate.toISOString().substring(0, 10);
     } else if (typeof canonicalStartDate === 'string') {
+      let normalizedDate: string;
+      try {
+        normalizedDate = MarketDataValidation.normalizeDateOnly(canonicalStartDate);
+      } catch {
+        throw new LegacySimulationRunDataOriginBinderIntegrityError();
+      }
+      if (normalizedDate !== canonicalStartDate) {
+        throw new LegacySimulationRunDataOriginBinderIntegrityError();
+      }
       parsedCanonicalStart = canonicalStartDate;
     } else {
       throw new LegacySimulationRunDataOriginBinderIntegrityError();

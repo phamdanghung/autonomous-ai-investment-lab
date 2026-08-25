@@ -137,13 +137,21 @@ describe('LegacySimulationRunDataOriginBinder', () => {
     await expectIntegrityError(validCommand);
   });
 
-  it('N. malformed date string rejected', async () => {
-    mockExecutor.execute.mockResolvedValue({
-      ...validLegacyResult,
-      canonicalStartDate: '2025-01'
+  describe('N. malformed date string validation', () => {
+    it.each([
+      ['2025-01'],
+      ['2025-1-15'],
+      ['2025-02-30'],
+      ['2025-01-15T00:00:00Z'],
+      [' 2025-01-15']
+    ])('rejects %s even if command date matches', async (badDate) => {
+      const badCommand = { ...validCommand, canonicalStartDate: badDate };
+      mockExecutor.execute.mockResolvedValue({
+        ...validLegacyResult,
+        canonicalStartDate: badDate
+      });
+      await expectIntegrityError(badCommand);
     });
-    // This will fail the `parsedCanonicalStart !== command.canonicalStartDate` check anyway
-    await expectIntegrityError(validCommand);
   });
 
   it('O. executor error propagated by object identity', async () => {
@@ -188,5 +196,10 @@ describe('LegacySimulationRunDataOriginBinder', () => {
     await binder.bind(validCommand);
     const args = mockExecutor.execute.mock.calls[0];
     expect(args[1]).toBe(validCommand.expectedVersion);
+  });
+
+  it('U. array result rejected', async () => {
+    mockExecutor.execute.mockResolvedValue([{ ...validLegacyResult }]);
+    await expectIntegrityError(validCommand);
   });
 });
