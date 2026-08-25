@@ -19,8 +19,36 @@ export class BindDataOriginService {
     const requestHash = TransitionRequestHashCalculator.calculate(dto);
     const existingEvent = await simulationRunCommandRepository.findEventByIdempotencyKey(dto.idempotencyKey);
     if (existingEvent) {
-      if (existingEvent.requestHash === requestHash) return existingEvent;
-      throw new IdempotencyKeyReusedError();
+      if (existingEvent.requestHash !== requestHash) {
+        throw new IdempotencyKeyReusedError();
+      }
+      if (existingEvent.runId !== runId) {
+        throw new IdempotencyKeyReusedError();
+      }
+      if (existingEvent.eventType !== 'DATA_BOUND') {
+        throw new IdempotencyKeyReusedError();
+      }
+
+      const run = await simulationRunQueryRepository.findDetailById(runId);
+      if (!run) throw new InvalidOperationError("Run not found");
+
+      if (run.dataOriginHash !== dto.dataOriginHash) {
+        throw new InvalidOperationError("Inconsistent replay dataOriginHash");
+      }
+
+      if (!(run.canonicalStartDate instanceof Date) || isNaN(run.canonicalStartDate.getTime())) {
+        throw new InvalidOperationError("Invalid persisted canonicalStartDate during replay");
+      }
+      const persistedDateStr = run.canonicalStartDate.toISOString().substring(0, 10);
+      if (persistedDateStr !== dto.canonicalStartDate) {
+        throw new InvalidOperationError("Inconsistent replay canonicalStartDate");
+      }
+
+      if (typeof run.runBusinessKey !== 'string' || !/^[a-f0-9]{64}$/.test(run.runBusinessKey)) {
+        throw new InvalidOperationError("Invalid persisted runBusinessKey during replay");
+      }
+
+      return run;
     }
 
     const run = await simulationRunQueryRepository.findDetailById(runId);
