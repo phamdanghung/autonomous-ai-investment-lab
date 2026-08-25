@@ -11,7 +11,7 @@ import {
 
 export class PortfolioLedgerGenesisInvalidError extends DomainError {
   constructor(message: string = 'Portfolio ledger genesis is invalid.') {
-    super('PORTFOLIO_LEDGER_GENESIS_INVALID', message);
+    super(message, 'PORTFOLIO_LEDGER_GENESIS_INVALID');
     this.name = 'PortfolioLedgerGenesisInvalidError';
     Object.setPrototypeOf(this, PortfolioLedgerGenesisInvalidError.prototype);
   }

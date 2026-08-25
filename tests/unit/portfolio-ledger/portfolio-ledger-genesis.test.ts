@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PortfolioLedgerGenesisDomain, PortfolioLedgerGenesisInvalidError } from '../../../src/domain/portfolio-ledger/PortfolioLedgerGenesis';
+import { CanonicalSerializer } from '../../../src/domain/hashing/CanonicalSerializer';
 
 describe('PortfolioLedgerGenesisDomain', () => {
   const validInput = {
@@ -24,8 +25,17 @@ describe('PortfolioLedgerGenesisDomain', () => {
 
   it('B fixed canonical serialization vector', () => {
     const result = PortfolioLedgerGenesisDomain.build(validInput);
-    // Tested implicitly by checking the hash in C
-    expect(result.genesisHash).toBe('4c601fe4c007eb9faac1df91fb0a46c3c319b4026e757f56de16825891f39fdb');
+    const payload = {
+      contractVersion: result.contractVersion,
+      ledgerKind: result.ledgerKind,
+      runBusinessKey: result.runBusinessKey,
+      canonicalStartDate: result.canonicalStartDate,
+      currency: result.currency,
+      openingCashVnd: result.openingCashVnd,
+      openingPositionCount: result.openingPositionCount
+    };
+    const serialized = CanonicalSerializer.serialize(payload);
+    expect(serialized).toBe('{"canonicalStartDate":"2025-01-15","contractVersion":"1.0","currency":"VND","ledgerKind":"SIMULATION_PORTFOLIO","openingCashVnd":"1000000000","openingPositionCount":0,"runBusinessKey":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}');
   });
 
   it('C fixed genesisHash vector', () => {
@@ -170,5 +180,22 @@ describe('PortfolioLedgerGenesisDomain', () => {
   it('AD ledgerKind always SIMULATION_PORTFOLIO', () => {
     const result = PortfolioLedgerGenesisDomain.build(validInput);
     expect(result.ledgerKind).toBe('SIMULATION_PORTFOLIO');
+  });
+
+  it('AE PortfolioLedgerGenesisInvalidError contract', () => {
+    const error = new PortfolioLedgerGenesisInvalidError();
+    expect(error.message).toBe('Portfolio ledger genesis is invalid.');
+    expect(error.code).toBe('PORTFOLIO_LEDGER_GENESIS_INVALID');
+    expect(error.name).toBe('PortfolioLedgerGenesisInvalidError');
+    expect(error).toBeInstanceOf(PortfolioLedgerGenesisInvalidError);
+  });
+
+  it('AF invalid build preserves error code', () => {
+    try {
+      PortfolioLedgerGenesisDomain.build({ ...validInput, initialCapitalVnd: -1n });
+      expect.fail('Should throw');
+    } catch (error: any) {
+      expect(error.code).toBe('PORTFOLIO_LEDGER_GENESIS_INVALID');
+    }
   });
 });
