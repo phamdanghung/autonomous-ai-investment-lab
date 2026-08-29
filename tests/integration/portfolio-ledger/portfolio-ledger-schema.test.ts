@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
-import { 
-  setupIsolatedTestSchema 
+import {
+  setupIsolatedTestSchema
 } from '../../utils/database';
 import crypto from 'crypto';
 
@@ -21,7 +21,7 @@ describe('PortfolioLedger Persistence Schema (1C.2A)', () => {
   beforeAll(async () => {
     isolated = await setupIsolatedTestSchema('portfolio_ledger_schema');
     process.env.DATABASE_URL = isolated.databaseUrl;
-    
+
     prisma = new PrismaClient({
       datasources: {
         db: { url: isolated.databaseUrl }
@@ -901,4 +901,341 @@ describe('PortfolioLedger Persistence Schema (1C.2A)', () => {
     });
 
   });
+
+
+it('A migration count', async () => {
+  const migrations = await prisma.$queryRaw`SELECT count(*) FROM _prisma_migrations`;
+  expect(Number((migrations as any)[0].count)).toBe(14);
+});
+
+it('B table existence', async () => {
+  const tables = await prisma.$queryRaw`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name IN ('PortfolioLedger', 'PortfolioLedgerPosition', 'PortfolioLedgerPosting')
+  `;
+  expect((tables as any[]).length).toBe(3);
+});
+
+it('position insert with version != 1 rejected', async () => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  await expect(prisma.portfolioLedgerPosition.create({
+    data: {
+      ledgerId: ledger!.id,
+      instrumentBusinessKey: validInstrumentBusinessKey,
+      quantity: 100n,
+      version: 2
+    }
+  })).rejects.toThrow('PortfolioLedgerPosition version must be 1 on insert');
+});
+
+it('AJ duplicate previous hash rejected', async () => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  const h1 = crypto.createHash('sha256').update('AJ_p_DUP').digest('hex');
+  await prisma.portfolioLedgerPosting.create({
+    data: {
+      ledgerId: ledger!.id, ledgerGenesisHash: ledger!.genesisHash, settlementContractVersion: '1.0', postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('AJ_s_1').digest('hex'), instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY', quantityDelta: 100n, grossCashDeltaVnd: -10000n, feeVnd: 0n, taxVnd: 0n, netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AJ_sp_1').digest('hex'),
+      transitionContractVersion: '1.0', transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd, cashDeltaVnd: -10000n, cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n, positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('AJ_th_1').digest('hex'),
+      entryContractVersion: '1.0', entryType: 'POSTING', entrySequence: 102n, effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: h1, entryHash: crypto.createHash('sha256').update('AJ_e_1').digest('hex'),
+    }
+  });
+  await expect(prisma.portfolioLedgerPosting.create({
+    data: {
+      ledgerId: ledger!.id, ledgerGenesisHash: ledger!.genesisHash, settlementContractVersion: '1.0', postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('AJ_s_2').digest('hex'), instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY', quantityDelta: 100n, grossCashDeltaVnd: -10000n, feeVnd: 0n, taxVnd: 0n, netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AJ_sp_2').digest('hex'),
+      transitionContractVersion: '1.0', transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd, cashDeltaVnd: -10000n, cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n, positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('AJ_th_2').digest('hex'),
+      entryContractVersion: '1.0', entryType: 'POSTING', entrySequence: 103n, effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: h1, entryHash: crypto.createHash('sha256').update('AJ_e_2').digest('hex'),
+    }
+  })).rejects.toThrow('Unique constraint failed');
+});
+
+it('AK duplicate source execution hash rejected', async () => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  const h1 = crypto.createHash('sha256').update('AK_s_DUP').digest('hex');
+  await prisma.portfolioLedgerPosting.create({
+    data: {
+      ledgerId: ledger!.id, ledgerGenesisHash: ledger!.genesisHash, settlementContractVersion: '1.0', postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: h1, instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY', quantityDelta: 100n, grossCashDeltaVnd: -10000n, feeVnd: 0n, taxVnd: 0n, netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AK_sp_1').digest('hex'),
+      transitionContractVersion: '1.0', transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd, cashDeltaVnd: -10000n, cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n, positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('AK_th_1').digest('hex'),
+      entryContractVersion: '1.0', entryType: 'POSTING', entrySequence: 104n, effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('AK_p_1').digest('hex'), entryHash: crypto.createHash('sha256').update('AK_e_1').digest('hex'),
+    }
+  });
+  await expect(prisma.portfolioLedgerPosting.create({
+    data: {
+      ledgerId: ledger!.id, ledgerGenesisHash: ledger!.genesisHash, settlementContractVersion: '1.0', postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: h1, instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY', quantityDelta: 100n, grossCashDeltaVnd: -10000n, feeVnd: 0n, taxVnd: 0n, netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AK_sp_2').digest('hex'),
+      transitionContractVersion: '1.0', transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd, cashDeltaVnd: -10000n, cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n, positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('AK_th_2').digest('hex'),
+      entryContractVersion: '1.0', entryType: 'POSTING', entrySequence: 105n, effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('AK_p_2').digest('hex'), entryHash: crypto.createHash('sha256').update('AK_e_2').digest('hex'),
+    }
+  })).rejects.toThrow('Unique constraint failed');
+});
+
+it('AL duplicate transition hash rejected', async () => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  const h1 = crypto.createHash('sha256').update('AL_t_DUP').digest('hex');
+  await prisma.portfolioLedgerPosting.create({
+    data: {
+      ledgerId: ledger!.id, ledgerGenesisHash: ledger!.genesisHash, settlementContractVersion: '1.0', postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('AL_se_1').digest('hex'), instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY', quantityDelta: 100n, grossCashDeltaVnd: -10000n, feeVnd: 0n, taxVnd: 0n, netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AL_sp_1').digest('hex'),
+      transitionContractVersion: '1.0', transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd, cashDeltaVnd: -10000n, cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n, positionQuantityAfter: 100n,
+      transitionHash: h1,
+      entryContractVersion: '1.0', entryType: 'POSTING', entrySequence: 106n, effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('AL_p_1').digest('hex'), entryHash: crypto.createHash('sha256').update('AL_e_1').digest('hex'),
+    }
+  });
+  await expect(prisma.portfolioLedgerPosting.create({
+    data: {
+      ledgerId: ledger!.id, ledgerGenesisHash: ledger!.genesisHash, settlementContractVersion: '1.0', postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('AL_se_2').digest('hex'), instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY', quantityDelta: 100n, grossCashDeltaVnd: -10000n, feeVnd: 0n, taxVnd: 0n, netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AL_sp_2').digest('hex'),
+      transitionContractVersion: '1.0', transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd, cashDeltaVnd: -10000n, cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n, positionQuantityAfter: 100n,
+      transitionHash: h1,
+      entryContractVersion: '1.0', entryType: 'POSTING', entrySequence: 107n, effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('AL_p_2').digest('hex'), entryHash: crypto.createHash('sha256').update('AL_e_2').digest('hex'),
+    }
+  })).rejects.toThrow('Unique constraint failed');
+});
+
+it.each([
+  { field: 'settlementContractVersion', value: '1.1' },
+  { field: 'postingKind', value: 'OTHER' },
+  { field: 'transitionContractVersion', value: '2.0' },
+  { field: 'transitionKind', value: 'OTHER' },
+  { field: 'entryContractVersion', value: '2.0' },
+  { field: 'entryType', value: 'OTHER' }
+])('AO contract constant checks reject invalid $field', async ({ field, value }) => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  const data: any = {
+      ledgerId: ledger!.id,
+      ledgerGenesisHash: ledger!.genesisHash,
+      settlementContractVersion: '1.0',
+      postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('AO_' + field).digest('hex'),
+      instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY',
+      quantityDelta: 100n,
+      grossCashDeltaVnd: -10000n,
+      feeVnd: 0n,
+      taxVnd: 0n,
+      netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AO_sp_' + field).digest('hex'),
+      transitionContractVersion: '1.0',
+      transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd,
+      cashDeltaVnd: -10000n,
+      cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n,
+      positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('AO_th_' + field).digest('hex'),
+      entryContractVersion: '1.0',
+      entryType: 'POSTING',
+      entrySequence: 900n + BigInt(field.length),
+      effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('AO_p_' + field).digest('hex'),
+      entryHash: crypto.createHash('sha256').update('AO_e_' + field).digest('hex'),
+  };
+  data[field] = value;
+  await expect(prisma.portfolioLedgerPosting.create({ data })).rejects.toThrow();
+});
+
+it.each([
+  'ledgerGenesisHash',
+  'sourceExecutionHash',
+  'settlementPayloadHash',
+  'transitionHash',
+  'previousHash',
+  'entryHash'
+])('AP hash format checks reject invalid %s', async (field) => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  const data: any = {
+      ledgerId: ledger!.id,
+      ledgerGenesisHash: ledger!.genesisHash,
+      settlementContractVersion: '1.0',
+      postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('AP_' + field).digest('hex'),
+      instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY',
+      quantityDelta: 100n,
+      grossCashDeltaVnd: -10000n,
+      feeVnd: 0n,
+      taxVnd: 0n,
+      netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AP_sp_' + field).digest('hex'),
+      transitionContractVersion: '1.0',
+      transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd,
+      cashDeltaVnd: -10000n,
+      cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n,
+      positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('AP_th_' + field).digest('hex'),
+      entryContractVersion: '1.0',
+      entryType: 'POSTING',
+      entrySequence: 1000n + BigInt(field.length),
+      effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('AP_p_' + field).digest('hex'),
+      entryHash: crypto.createHash('sha256').update('AP_e_' + field).digest('hex'),
+  };
+  data[field] = 'INVALID_UPPERCASE_OR_SHORT_HASH';
+  await expect(prisma.portfolioLedgerPosting.create({ data })).rejects.toThrow();
+});
+
+it.each([
+  { desc: 'AQ entry sequence lower bound', field: 'entrySequence', value: 0n },
+  { desc: 'AR entry sequence upper bound', field: 'entrySequence', value: 9007199254740992n },
+  { desc: 'AS negative fee', field: 'feeVnd', value: -1n },
+  { desc: 'AT negative tax', field: 'taxVnd', value: -1n },
+  { desc: 'AU net cash arithmetic', field: 'netCashDeltaVnd', value: -9000n },
+  { desc: 'AV cash delta arithmetic', field: 'cashDeltaVnd', value: -9000n },
+  { desc: 'AW cash after arithmetic', field: 'cashBalanceAfterVnd', value: 0n },
+  { desc: 'AX position after arithmetic', field: 'positionQuantityAfter', value: 0n },
+  { desc: 'BA negative cash after', field: 'cashBalanceAfterVnd', value: -1n },
+  { desc: 'BB negative position after', field: 'positionQuantityAfter', value: -1n }
+])('$desc', async ({ field, value }) => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  const data: any = {
+      ledgerId: ledger!.id,
+      ledgerGenesisHash: ledger!.genesisHash,
+      settlementContractVersion: '1.0',
+      postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('MATH_' + field).digest('hex'),
+      instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'BUY',
+      quantityDelta: 100n,
+      grossCashDeltaVnd: -10000n,
+      feeVnd: 0n,
+      taxVnd: 0n,
+      netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('MATH_sp_' + field).digest('hex'),
+      transitionContractVersion: '1.0',
+      transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd,
+      cashDeltaVnd: -10000n,
+      cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n,
+      positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('MATH_th_' + field).digest('hex'),
+      entryContractVersion: '1.0',
+      entryType: 'POSTING',
+      entrySequence: 2000n + BigInt(field.length),
+      effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('MATH_p_' + field).digest('hex'),
+      entryHash: crypto.createHash('sha256').update('MATH_e_' + field).digest('hex'),
+  };
+
+  if (field === 'cashBalanceAfterVnd' && value === -1n) {
+    // BA setup: valid otherwise but cash is negative
+    data.grossCashDeltaVnd = -20000000n;
+    data.netCashDeltaVnd = -20000000n;
+    data.cashDeltaVnd = -20000000n;
+  }
+
+  if (field === 'positionQuantityAfter' && value === -1n) {
+    // BB setup
+    data.quantityDelta = -100n;
+    data.side = 'SELL';
+    data.grossCashDeltaVnd = 10000n;
+    data.netCashDeltaVnd = 10000n;
+    data.cashDeltaVnd = 10000n;
+    data.cashBalanceAfterVnd = ledger!.currentCashBalanceVnd + 10000n;
+  }
+
+  data[field] = value;
+  await expect(prisma.portfolioLedgerPosting.create({ data })).rejects.toThrow();
+});
+
+it('AZ SELL contradiction rejected', async () => {
+  const ledger = await prisma.portfolioLedger.findUnique({ where: { runBusinessKey } });
+  await expect(prisma.portfolioLedgerPosting.create({
+    data: {
+      ledgerId: ledger!.id,
+      ledgerGenesisHash: ledger!.genesisHash,
+      settlementContractVersion: '1.0',
+      postingKind: 'TRADE_SETTLEMENT',
+      sourceExecutionHash: crypto.createHash('sha256').update('AZ_s').digest('hex'),
+      instrumentBusinessKey: validInstrumentBusinessKey,
+      side: 'SELL',
+      quantityDelta: 100n, // Contradiction: SELL should be < 0
+      grossCashDeltaVnd: -10000n, // Contradiction: SELL should be > 0
+      feeVnd: 0n,
+      taxVnd: 0n,
+      netCashDeltaVnd: -10000n,
+      settlementPayloadHash: crypto.createHash('sha256').update('AZ_sp').digest('hex'),
+      transitionContractVersion: '1.0',
+      transitionKind: 'TRADE_SETTLEMENT_APPLIED',
+      cashBalanceBeforeVnd: ledger!.currentCashBalanceVnd,
+      cashDeltaVnd: -10000n,
+      cashBalanceAfterVnd: ledger!.currentCashBalanceVnd - 10000n,
+      positionQuantityBefore: 0n,
+      positionQuantityAfter: 100n,
+      transitionHash: crypto.createHash('sha256').update('AZ_th').digest('hex'),
+      entryContractVersion: '1.0',
+      entryType: 'POSTING',
+      entrySequence: 3000n,
+      effectiveDate: new Date('2025-01-01T00:00:00Z'),
+      previousHash: crypto.createHash('sha256').update('AZ_p').digest('hex'),
+      entryHash: crypto.createHash('sha256').update('AZ_e').digest('hex'),
+    }
+  })).rejects.toThrow();
+});
+
+it('BC effectiveDate is DATE in postgresql', async () => {
+  const result: any[] = await prisma.$queryRaw`
+    SELECT data_type
+    FROM information_schema.columns
+    WHERE table_name = 'PortfolioLedgerPosting' AND column_name = 'effectiveDate'
+  `;
+  expect(result[0].data_type).toBe('date');
+});
+
+it('BD FK DELETE action is RESTRICT', async () => {
+  const result: any[] = await prisma.$queryRaw`
+    SELECT
+      tc.constraint_name,
+      rc.delete_rule
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.referential_constraints rc
+      ON tc.constraint_name = rc.constraint_name
+    WHERE tc.table_name IN ('PortfolioLedger', 'PortfolioLedgerPosition', 'PortfolioLedgerPosting')
+  `;
+  for (const row of result) {
+    if (row.constraint_name.includes('fkey')) {
+      expect(row.delete_rule).toBe('RESTRICT');
+    }
+  }
+});
+
 });

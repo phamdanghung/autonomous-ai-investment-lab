@@ -267,6 +267,12 @@ EXECUTE FUNCTION validate_portfolio_ledger_mutation();
 CREATE OR REPLACE FUNCTION validate_portfolio_ledger_position_mutation()
 RETURNS TRIGGER AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."version" <> 1 THEN
+            RAISE EXCEPTION 'PortfolioLedgerPosition version must be 1 on insert';
+        END IF;
+    END IF;
+
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'PortfolioLedgerPosition cannot be deleted';
     END IF;
@@ -290,7 +296,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trigger_portfolio_ledger_position_mutation_guard
-BEFORE UPDATE OR DELETE ON "PortfolioLedgerPosition"
+BEFORE INSERT OR UPDATE OR DELETE ON "PortfolioLedgerPosition"
 FOR EACH ROW
 EXECUTE FUNCTION validate_portfolio_ledger_position_mutation();
 
