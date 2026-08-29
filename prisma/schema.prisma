@@ -64,6 +64,7 @@ model SimulationRun {
 
   configVersion RunCoreConfigVersion @relation(fields: [configVersionId], references: [id], onDelete: Restrict)
   events        SimulationRunEvent[]
+  portfolioLedger PortfolioLedger?
 
   @@index([status])
   @@index([mode])
@@ -175,6 +176,8 @@ model MarketInstrument {
   sealedAt        DateTime
 
   dailyBars DailyMarketBar[]
+  portfolioLedgerPositions PortfolioLedgerPosition[]  @relation("PortfolioLedgerPositionInstrument")
+  portfolioLedgerPostings PortfolioLedgerPosting[]  @relation("PortfolioLedgerPostingInstrument")
 
   @@index([exchange, canonicalSymbol, securityType, effectiveFrom])
 }
@@ -324,4 +327,96 @@ model DatasetSnapshotEntry {
   @@unique([snapshotId, dailyBarId])
   @@unique([snapshotId, instrumentBusinessKey, marketDate])
   @@unique([snapshotId, entryHash])
+}
+
+
+model PortfolioLedger {
+  id                    String   @id @default(uuid())
+  runId                 String   @unique
+  runBusinessKey        String   @unique
+  contractVersion       String
+  ledgerKind            String
+  canonicalStartDate    DateTime @db.Date
+  currency              String
+  openingCashVnd        BigInt
+  openingPositionCount  Int
+  genesisHash           String   @unique
+
+  currentCashBalanceVnd BigInt
+  lastEntrySequence     BigInt
+  lastEntryHash         String   @unique
+  version               Int      @default(1)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  run       SimulationRun             @relation(fields: [runId], references: [id], onDelete: Restrict)
+  positions PortfolioLedgerPosition[]
+  postings  PortfolioLedgerPosting[]
+}
+
+model PortfolioLedgerPosition {
+  id                    String   @id @default(uuid())
+  ledgerId              String
+  instrumentBusinessKey String
+  quantity              BigInt
+  version               Int      @default(1)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  ledger PortfolioLedger @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+
+  instrument MarketInstrument @relation("PortfolioLedgerPositionInstrument", fields: [instrumentBusinessKey], references: [businessKey], onDelete: Restrict)
+
+  @@unique([ledgerId, instrumentBusinessKey])
+  @@index([instrumentBusinessKey])
+}
+
+model PortfolioLedgerPosting {
+  id                        String   @id @default(uuid())
+  ledgerId                  String
+  ledgerGenesisHash         String
+
+  settlementContractVersion String
+  postingKind               String
+  sourceExecutionHash       String
+  instrumentBusinessKey     String
+  side                      String
+  quantityDelta             BigInt
+  grossCashDeltaVnd         BigInt
+  feeVnd                    BigInt
+  taxVnd                    BigInt
+  netCashDeltaVnd           BigInt
+  settlementPayloadHash     String
+
+  transitionContractVersion String
+  transitionKind            String
+  cashBalanceBeforeVnd      BigInt
+  cashDeltaVnd              BigInt
+  cashBalanceAfterVnd       BigInt
+  positionQuantityBefore    BigInt
+  positionQuantityAfter     BigInt
+  transitionHash            String
+
+  entryContractVersion      String
+  entryType                 String
+  entrySequence             BigInt
+  effectiveDate             DateTime @db.Date
+  previousHash              String
+  entryHash                 String   @unique
+
+  createdAt                 DateTime @default(now())
+
+  ledger PortfolioLedger @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+
+  instrument MarketInstrument @relation("PortfolioLedgerPostingInstrument", fields: [instrumentBusinessKey], references: [businessKey], onDelete: Restrict)
+
+  @@unique([ledgerId, entrySequence])
+  @@unique([ledgerId, previousHash])
+  @@unique([ledgerId, sourceExecutionHash])
+  @@unique([ledgerId, transitionHash])
+
+  @@index([ledgerId, instrumentBusinessKey, entrySequence])
+  @@index([instrumentBusinessKey])
+  @@index([effectiveDate])
 }

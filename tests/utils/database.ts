@@ -134,8 +134,8 @@ export async function setupIsolatedTestSchema(
     }
 
     const migrationsRows = await isolatedClient.$queryRaw<{ count: bigint }[]>`SELECT count(*) as count FROM _prisma_migrations;`;
-    if (Number(migrationsRows[0].count) !== 13) {
-      throw new Error(`Expected 13 migrations, found ${migrationsRows[0].count}`);
+    if (Number(migrationsRows[0].count) !== 14) {
+      throw new Error(`Expected 14 migrations, found ${migrationsRows[0].count}`);
     }
 
     const tables = await isolatedClient.$queryRaw<{ tablename: string }[]>`
