@@ -8,6 +8,16 @@ import {
 import { PortfolioLedgerPostingInvalidError } from '../../../src/domain/portfolio-ledger/PortfolioLedgerPosting';
 import * as crypto from 'crypto';
 
+async function expectIndependentPostgresSessions(clientA: PrismaClient, clientB: PrismaClient) {
+  const resA = await clientA.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+  const resB = await clientB.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+  const pidA = resA[0].pid;
+  const pidB = resB[0].pid;
+  expect(pidA).toBeDefined();
+  expect(pidB).toBeDefined();
+  expect(pidA).not.toBe(pidB);
+}
+
 describe('Portfolio Posting Concurrency Race', () => {
   let isolated: IsolatedTestSchema;
   let adminPrisma: PrismaClient;
@@ -152,6 +162,7 @@ describe('Portfolio Posting Concurrency Race', () => {
     const srcExecHash = crypto.createHash('sha256').update('r1').digest('hex');
     
     const { clients } = createBarrierClients(2);
+    await expectIndependentPostgresSessions(clients[0] as PrismaClient, clients[1] as PrismaClient);
     const repo1 = new PrismaPortfolioPostingRepository(clients[0]);
     const repo2 = new PrismaPortfolioPostingRepository(clients[1]);
 
@@ -190,6 +201,12 @@ describe('Portfolio Posting Concurrency Race', () => {
 
     const head = await adminPrisma.portfolioLedger.findUnique({ where: { id: ledgerId } });
     expect(head!.lastEntrySequence).toBe(1n);
+    expect(head!.version).toBe(2);
+    expect(head!.currentCashBalanceVnd).toBe(80000000n); // 100M - 20M
+
+    const pos = await adminPrisma.portfolioLedgerPosition.findUnique({ where: { ledgerId_instrumentBusinessKey: { ledgerId, instrumentBusinessKey: validInstrumentBusinessKey } } });
+    expect(pos!.quantity).toBe(1000n);
+    expect(pos!.version).toBe(1);
   });
 
   it('R2: same ledger, same source, diff settlement -> collision', async () => {
@@ -197,6 +214,7 @@ describe('Portfolio Posting Concurrency Race', () => {
     const srcExecHash = crypto.createHash('sha256').update('r2').digest('hex');
     
     const { clients } = createBarrierClients(2);
+    await expectIndependentPostgresSessions(clients[0] as PrismaClient, clients[1] as PrismaClient);
     const repo1 = new PrismaPortfolioPostingRepository(clients[0]);
     const repo2 = new PrismaPortfolioPostingRepository(clients[1]);
 
@@ -235,7 +253,14 @@ describe('Portfolio Posting Concurrency Race', () => {
     
     expect(successes.length).toBe(1);
     expect(failures.length).toBe(1);
+    expect((successes[0] as any).value.disposition).toBe('CREATED');
     expect((failures[0] as any).reason).toBeInstanceOf(PortfolioPostingIdempotencyCollisionError);
+
+    const postCount = await adminPrisma.portfolioLedgerPosting.count({ where: { ledgerId } });
+    expect(postCount).toBe(1);
+
+    const head = await adminPrisma.portfolioLedger.findUnique({ where: { id: ledgerId } });
+    expect(head!.version).toBe(2);
   });
 
   it('R3: same ledger, competing BUYs, sufficient for only one', async () => {
@@ -244,6 +269,7 @@ describe('Portfolio Posting Concurrency Race', () => {
     const srcExecHash2 = crypto.createHash('sha256').update('r3_2').digest('hex');
     
     const { clients } = createBarrierClients(2);
+    await expectIndependentPostgresSessions(clients[0] as PrismaClient, clients[1] as PrismaClient);
     const repo1 = new PrismaPortfolioPostingRepository(clients[0]);
     const repo2 = new PrismaPortfolioPostingRepository(clients[1]);
 
@@ -285,7 +311,11 @@ describe('Portfolio Posting Concurrency Race', () => {
     expect((failures[0] as any).reason).toBeInstanceOf(PortfolioLedgerPostingInvalidError);
     
     const head = await adminPrisma.portfolioLedger.findUnique({ where: { id: ledgerId } });
-    expect(head!.currentCashBalanceVnd).toBeGreaterThanOrEqual(0n);
+    expect(head!.currentCashBalanceVnd).toBe(20000000n);
+    expect(head!.version).toBe(2);
+
+    const postCount = await adminPrisma.portfolioLedgerPosting.count({ where: { ledgerId } });
+    expect(postCount).toBe(1);
   });
 
   it('R4: same ledger/instrument, competing SELLs', async () => {
@@ -311,6 +341,7 @@ describe('Portfolio Posting Concurrency Race', () => {
     const srcExecHash2 = crypto.createHash('sha256').update('r4_2').digest('hex');
     
     const { clients } = createBarrierClients(2);
+    await expectIndependentPostgresSessions(clients[0] as PrismaClient, clients[1] as PrismaClient);
     const repo1 = new PrismaPortfolioPostingRepository(clients[0]);
     const repo2 = new PrismaPortfolioPostingRepository(clients[1]);
 
@@ -350,6 +381,13 @@ describe('Portfolio Posting Concurrency Race', () => {
     expect(successes.length).toBe(1);
     expect(failures.length).toBe(1);
     expect((failures[0] as any).reason).toBeInstanceOf(PortfolioLedgerPostingInvalidError);
+
+    const pos = await adminPrisma.portfolioLedgerPosition.findUnique({ where: { ledgerId_instrumentBusinessKey: { ledgerId, instrumentBusinessKey: validInstrumentBusinessKey } } });
+    expect(pos!.quantity).toBe(0n);
+    expect(pos!.version).toBe(2);
+
+    const postCount = await adminPrisma.portfolioLedgerPosting.count({ where: { ledgerId } });
+    expect(postCount).toBe(2);
   });
 
   it('R5: different instruments competing for shared cash', async () => {
@@ -358,6 +396,7 @@ describe('Portfolio Posting Concurrency Race', () => {
     const srcExecHash2 = crypto.createHash('sha256').update('r5_2').digest('hex');
     
     const { clients } = createBarrierClients(2);
+    await expectIndependentPostgresSessions(clients[0] as PrismaClient, clients[1] as PrismaClient);
     const repo1 = new PrismaPortfolioPostingRepository(clients[0]);
     const repo2 = new PrismaPortfolioPostingRepository(clients[1]);
 
@@ -396,6 +435,13 @@ describe('Portfolio Posting Concurrency Race', () => {
     
     expect(successes.length).toBe(1);
     expect(failures.length).toBe(1); // One should fail due to cash lock serialization
+
+    const head = await adminPrisma.portfolioLedger.findUnique({ where: { id: ledgerId } });
+    const successfulPosting = (successes[0] as any).value.posting;
+    expect(head!.currentCashBalanceVnd).toBe(BigInt(successfulPosting.transition.cashBalanceAfterVnd));
+
+    const postCount = await adminPrisma.portfolioLedgerPosting.count({ where: { ledgerId } });
+    expect(postCount).toBe(1);
   });
 
   it('R6: different ledgers same source -> both succeed independently', async () => {
@@ -405,6 +451,7 @@ describe('Portfolio Posting Concurrency Race', () => {
     
     const { clients, release } = createBarrierClients(2);
     
+    await expectIndependentPostgresSessions(clients[0] as PrismaClient, clients[1] as PrismaClient);
     const repo1 = new PrismaPortfolioPostingRepository(clients[0]);
     const repo2 = new PrismaPortfolioPostingRepository(clients[1]);
 
@@ -440,6 +487,13 @@ describe('Portfolio Posting Concurrency Race', () => {
 
     const successes = results.filter(r => r.status === 'fulfilled');
     expect(successes.length).toBe(2);
+    expect((successes[0] as any).value.disposition).toBe('CREATED');
+    expect((successes[1] as any).value.disposition).toBe('CREATED');
+
+    const postCount1 = await adminPrisma.portfolioLedgerPosting.count({ where: { ledgerId: ledger1 } });
+    const postCount2 = await adminPrisma.portfolioLedgerPosting.count({ where: { ledgerId: ledger2 } });
+    expect(postCount1).toBe(1);
+    expect(postCount2).toBe(1);
   });
 
   it('R7: second derives fresh head and becomes N+1', async () => {
@@ -448,6 +502,7 @@ describe('Portfolio Posting Concurrency Race', () => {
     const srcExecHash2 = crypto.createHash('sha256').update('r7_2').digest('hex');
     
     const { clients } = createBarrierClients(2);
+    await expectIndependentPostgresSessions(clients[0] as PrismaClient, clients[1] as PrismaClient);
     const repo1 = new PrismaPortfolioPostingRepository(clients[0]);
     const repo2 = new PrismaPortfolioPostingRepository(clients[1]);
 
@@ -483,6 +538,8 @@ describe('Portfolio Posting Concurrency Race', () => {
 
     const successes = results.filter(r => r.status === 'fulfilled').map(r => (r as any).value);
     expect(successes.length).toBe(2);
+    expect(successes[0].disposition).toBe('CREATED');
+    expect(successes[1].disposition).toBe('CREATED');
     
     const seq1 = successes.find(s => s.posting.entry.entrySequence === 1);
     const seq2 = successes.find(s => s.posting.entry.entrySequence === 2);
@@ -494,5 +551,8 @@ describe('Portfolio Posting Concurrency Race', () => {
     
     const head = await adminPrisma.portfolioLedger.findUnique({ where: { id: ledgerId } });
     expect(head!.lastEntrySequence).toBe(2n);
+
+    const postCount = await adminPrisma.portfolioLedgerPosting.count({ where: { ledgerId } });
+    expect(postCount).toBe(2);
   });
 });

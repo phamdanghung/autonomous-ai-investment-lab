@@ -55,14 +55,10 @@ export class PrismaPortfolioPostingRepository implements PortfolioPostingReposit
 
     const canonicalSettlement = PortfolioLedgerTradeSettlementDomain.build(command.settlement);
 
-    const precheckRow = await this.prisma.portfolioLedgerPosting.findUnique({
-      where: {
-        ledgerId_sourceExecutionHash: {
-          ledgerId: command.ledgerId,
-          sourceExecutionHash: canonicalSettlement.sourceExecutionHash
-        }
-      }
-    });
+    const precheckRow = await this.findPostingByIdentityRoot(
+      command.ledgerId,
+      canonicalSettlement.sourceExecutionHash
+    );
 
     if (precheckRow) {
       this.verifyReplayEquivalence(precheckRow, canonicalSettlement.payloadHash, canonicalEffectiveDate);
@@ -240,14 +236,10 @@ export class PrismaPortfolioPostingRepository implements PortfolioPostingReposit
         error.code === 'P2002'
       ) {
         if (this.isTargetingSourceExecutionHash(error.meta?.target)) {
-          const winnerRow = await this.prisma.portfolioLedgerPosting.findUnique({
-            where: {
-              ledgerId_sourceExecutionHash: {
-                ledgerId: command.ledgerId,
-                sourceExecutionHash: canonicalSettlement.sourceExecutionHash
-              }
-            }
-          });
+          const winnerRow = await this.findPostingByIdentityRoot(
+            command.ledgerId,
+            canonicalSettlement.sourceExecutionHash
+          );
 
           if (!winnerRow) {
             throw new PortfolioPostingIntegrityError('Winner row missing after unique constraint abort.');
@@ -265,6 +257,24 @@ export class PrismaPortfolioPostingRepository implements PortfolioPostingReposit
         }
       }
 
+      this.handlePrismaError(error);
+    }
+  }
+
+  private async findPostingByIdentityRoot(
+    ledgerId: string,
+    sourceExecutionHash: string
+  ): Promise<PrismaPortfolioLedgerPosting | null> {
+    try {
+      return await this.prisma.portfolioLedgerPosting.findUnique({
+        where: {
+          ledgerId_sourceExecutionHash: {
+            ledgerId,
+            sourceExecutionHash
+          }
+        }
+      });
+    } catch (error) {
       this.handlePrismaError(error);
     }
   }
