@@ -15,6 +15,38 @@ import {
 } from '../../../application/ports/portfolio-ledger/PortfolioLedgerVerificationRepositoryPorts';
 
 export class PrismaPortfolioLedgerVerificationRepository implements PortfolioLedgerVerificationRepository {
+
+  private handlePrismaError(error: unknown): never {
+    if (
+      error instanceof PortfolioLedgerVerificationRunNotFoundError ||
+      error instanceof PortfolioLedgerVerificationLedgerNotFoundError ||
+      error instanceof PortfolioLedgerVerificationIntegrityError ||
+      error instanceof PortfolioLedgerVerificationConcurrencyError
+    ) {
+      throw error;
+    }
+    
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2034') {
+        throw new PortfolioLedgerVerificationConcurrencyError(error.message);
+      }
+      if (error.code.startsWith('P2')) {
+        throw new PortfolioLedgerVerificationIntegrityError(error.message);
+      }
+    }
+    
+    if (
+      error instanceof Prisma.PrismaClientUnknownRequestError ||
+      error instanceof Prisma.PrismaClientValidationError ||
+      error instanceof Prisma.PrismaClientInitializationError ||
+      error instanceof Prisma.PrismaClientRustPanicError
+    ) {
+      throw new PortfolioLedgerVerificationIntegrityError((error as Error).message);
+    }
+    
+    throw error;
+  }
+
   constructor(private readonly prisma: PrismaClient) {}
 
   public async verify(command: VerifyPortfolioLedgerCommand): Promise<VerifiedPortfolioLedgerSnapshot> {
@@ -24,7 +56,23 @@ export class PrismaPortfolioLedgerVerificationRepository implements PortfolioLed
         const run = await tx.simulationRun.findUnique({ where: { id: command.runId } });
         if (!run) throw new PortfolioLedgerVerificationRunNotFoundError();
 
-        // Check untrusted persisted parent
+        // 2. read RunCoreConfigVersion
+        const config = await tx.runCoreConfigVersion.findUnique({ where: { id: run.configVersionId } });
+
+        // 3. read PortfolioLedger
+        const ledger = await tx.portfolioLedger.findUnique({ where: { runId: command.runId } });
+        if (!ledger) {
+          throw new PortfolioLedgerVerificationLedgerNotFoundError();
+        }
+
+        if (run.status === 'INITIALIZED') {
+          throw new PortfolioLedgerVerificationIntegrityError('Legitimate ledger exists for INITIALIZED run');
+        }
+
+        if (!config) throw new PortfolioLedgerVerificationIntegrityError('Config not found');
+        if (config.initialCapital < 0n) throw new PortfolioLedgerVerificationIntegrityError('Negative initialCapital');
+        
+        // 4. validate parent structural fields ONLY AFTER ledger exists
         if (
           !run.runBusinessKey ||
           run.runBusinessKey.length !== 64 ||
@@ -43,22 +91,6 @@ export class PrismaPortfolioLedgerVerificationRepository implements PortfolioLed
           throw new PortfolioLedgerVerificationIntegrityError('Invalid canonicalStartDate format');
         }
 
-        // 2. read RunCoreConfigVersion
-        const config = await tx.runCoreConfigVersion.findUnique({ where: { id: run.configVersionId } });
-        if (!config) throw new PortfolioLedgerVerificationIntegrityError('Config not found');
-        if (config.initialCapital < 0n) throw new PortfolioLedgerVerificationIntegrityError('Negative initialCapital');
-
-        // 3. read PortfolioLedger
-        const ledger = await tx.portfolioLedger.findUnique({ where: { runId: command.runId } });
-        if (!ledger) {
-          if (run.status === 'INITIALIZED') throw new PortfolioLedgerVerificationIntegrityError('INITIALIZED run should not have missing ledger (wait, run status check)');
-          throw new PortfolioLedgerVerificationLedgerNotFoundError();
-        }
-
-        if (run.status === 'INITIALIZED') {
-          throw new PortfolioLedgerVerificationIntegrityError('Legitimate ledger exists for INITIALIZED run');
-        }
-
         // Rebuild genesis
         let genesis;
         try {
@@ -67,8 +99,8 @@ export class PrismaPortfolioLedgerVerificationRepository implements PortfolioLed
             canonicalStartDate: canonicalRunDate,
             initialCapitalVnd: config.initialCapital
           });
-        } catch (e: any) {
-          throw new PortfolioLedgerVerificationIntegrityError('Genesis rebuild failed: ' + e.message);
+        } catch (e: unknown) {
+          throw new PortfolioLedgerVerificationIntegrityError('Genesis rebuild failed: ' + (e as Error).message);
         }
 
         // Verify Immutable Ledger Root
@@ -133,8 +165,8 @@ export class PrismaPortfolioLedgerVerificationRepository implements PortfolioLed
               feeVnd: row.feeVnd,
               taxVnd: row.taxVnd
             });
-          } catch (e: any) {
-            throw new PortfolioLedgerVerificationIntegrityError('Settlement rebuild failed: ' + e.message);
+          } catch (e: unknown) {
+            throw new PortfolioLedgerVerificationIntegrityError('Settlement rebuild failed: ' + (e as Error).message);
           }
 
           if (rebuiltSettlement.contractVersion !== row.settlementContractVersion) throw new PortfolioLedgerVerificationIntegrityError('Settlement contractVersion mismatch');
@@ -160,15 +192,15 @@ export class PrismaPortfolioLedgerVerificationRepository implements PortfolioLed
           try {
             recomposedPosting = PortfolioLedgerPostingDomain.compose({
               ledgerGenesisHash: row.ledgerGenesisHash,
-              entrySequence: Number(row.entrySequence),
+              entrySequence: (row.entrySequence >= 1n && row.entrySequence <= 9007199254740991n) ? Number(row.entrySequence) : (() => { throw new PortfolioLedgerVerificationIntegrityError('Posting entrySequence out of bounds'); })(),
               effectiveDate: canonicalEffectiveDate,
               previousHash: row.previousHash,
               cashBalanceBeforeVnd: row.cashBalanceBeforeVnd,
               positionQuantityBefore: row.positionQuantityBefore,
               settlement: rebuiltSettlement
             });
-          } catch (e: any) {
-            throw new PortfolioLedgerVerificationIntegrityError('Posting recompose failed: ' + e.message);
+          } catch (e: unknown) {
+            throw new PortfolioLedgerVerificationIntegrityError('Posting recompose failed: ' + (e as Error).message);
           }
 
           if (recomposedPosting.transition.contractVersion !== row.transitionContractVersion) throw new PortfolioLedgerVerificationIntegrityError('Transition contractVersion mismatch');
@@ -255,30 +287,8 @@ export class PrismaPortfolioLedgerVerificationRepository implements PortfolioLed
         };
 
       }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, maxWait: 15000, timeout: 30000 });
-    } catch (e: any) {
-      if (
-        e instanceof PortfolioLedgerVerificationRunNotFoundError ||
-        e instanceof PortfolioLedgerVerificationLedgerNotFoundError ||
-        e instanceof PortfolioLedgerVerificationIntegrityError ||
-        e instanceof PortfolioLedgerVerificationConcurrencyError
-      ) {
-        throw e;
-      }
-      if (e.code === 'P2034') {
-        throw new PortfolioLedgerVerificationConcurrencyError(e.message);
-      }
-      if (e.code && typeof e.code === 'string' && e.code.startsWith('P2')) {
-        throw new PortfolioLedgerVerificationIntegrityError(e.message);
-      }
-      if (
-        e.name === 'PrismaClientUnknownRequestError' ||
-        e.name === 'PrismaClientValidationError' ||
-        e.name === 'PrismaClientInitializationError' ||
-        e.name === 'PrismaClientRustPanicError'
-      ) {
-        throw new PortfolioLedgerVerificationIntegrityError(e.message);
-      }
-      throw e;
+    } catch (e: unknown) {
+      this.handlePrismaError(e);
     }
   }
 }

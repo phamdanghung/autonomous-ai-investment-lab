@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { PrismaPortfolioLedgerVerificationRepository } from '../../../src/infrastructure/repositories/portfolio-ledger/PrismaPortfolioLedgerVerificationRepository';
 import { PrismaPortfolioLedgerInitializationRepository } from '../../../src/infrastructure/repositories/portfolio-ledger/PrismaPortfolioLedgerInitializationRepository';
 import { PrismaPortfolioPostingRepository } from '../../../src/infrastructure/repositories/portfolio-ledger/PrismaPortfolioPostingRepository';
@@ -405,9 +405,7 @@ describe('PrismaPortfolioLedgerVerificationRepository', () => {
       query: {
         simulationRun: {
           async findUnique() {
-            const err: any = new Error('conflict');
-            err.code = 'P2034';
-            throw err;
+            throw new Prisma.PrismaClientKnownRequestError('conflict', { code: 'P2034', clientVersion: '4.16.2' });
           }
         }
       }
@@ -421,15 +419,104 @@ describe('PrismaPortfolioLedgerVerificationRepository', () => {
       query: {
         simulationRun: {
           async findUnique() {
-            const err: any = new Error('broken');
-            err.code = 'P2022';
-            throw err;
+            throw new Prisma.PrismaClientKnownRequestError('broken', { code: 'P2022', clientVersion: '4.16.2' });
           }
         }
       }
     });
     const repoExt = new PrismaPortfolioLedgerVerificationRepository(ext as any);
     await expect(repoExt.verify({ runId: randomUUID() })).rejects.toThrow(PortfolioLedgerVerificationIntegrityError);
+  });
+
+  it('AC: unrelated error preservation -> rethrows unchanged', async () => {
+    const sentinel = new Error('sentinel');
+    const ext = prisma.$extends({
+      query: {
+        simulationRun: {
+          async findUnique() {
+            throw sentinel;
+          }
+        }
+      }
+    });
+    const repoExt = new PrismaPortfolioLedgerVerificationRepository(ext as any);
+    await expect(repoExt.verify({ runId: randomUUID() })).rejects.toBe(sentinel);
+
+    const primitiveSentinel = 'just a string error';
+    const ext2 = prisma.$extends({
+      query: {
+        simulationRun: {
+          async findUnique() {
+            throw primitiveSentinel;
+          }
+        }
+      }
+    });
+    const repoExt2 = new PrismaPortfolioLedgerVerificationRepository(ext2 as any);
+    await expect(repoExt2.verify({ runId: randomUUID() })).rejects.toBe(primitiveSentinel);
+  });
+
+  it('AD: INITIALIZED + NO LEDGER -> LedgerNotFoundError', async () => {
+    const { run } = await createRun();
+    const ext = prisma.$extends({
+      query: {
+        simulationRun: {
+          async findUnique({ args, query }: any) {
+            const res = await query(args);
+            if (res) res.status = 'INITIALIZED';
+            return res;
+          }
+        }
+      }
+    });
+    const repoExt = new PrismaPortfolioLedgerVerificationRepository(ext as any);
+    await expect(repoExt.verify({ runId: run.id })).rejects.toThrow(PortfolioLedgerVerificationLedgerNotFoundError);
+  });
+
+  it('AE: INITIALIZED + EXISTING LEDGER -> IntegrityError', async () => {
+    const { run } = await createRun();
+    const l = await initialize(run.id);
+
+    // intercept to return INITIALIZED
+    const ext = prisma.$extends({
+      query: {
+        simulationRun: {
+          async findUnique({ args, query }: any) {
+            const res = await query(args);
+            if (res) res.status = 'INITIALIZED';
+            return res;
+          }
+        }
+      }
+    });
+    const repoExt = new PrismaPortfolioLedgerVerificationRepository(ext as any);
+    await expect(repoExt.verify({ runId: run.id })).rejects.toThrow(PortfolioLedgerVerificationIntegrityError);
+  });
+
+  it('AF: explicit zero-write verifier evidence', async () => {
+    const { run } = await createRun();
+    await initialize(run.id);
+    
+    let writeCounter = 0;
+    const sentinel = new Error('WRITE_SENTINEL');
+    const ext = prisma.$extends({
+      query: {
+        $allModels: {
+          async create() { writeCounter++; throw sentinel; },
+          async createMany() { writeCounter++; throw sentinel; },
+          async update() { writeCounter++; throw sentinel; },
+          async updateMany() { writeCounter++; throw sentinel; },
+          async delete() { writeCounter++; throw sentinel; },
+          async deleteMany() { writeCounter++; throw sentinel; },
+          async upsert() { writeCounter++; throw sentinel; },
+        }
+      }
+    });
+
+    const repoExt = new PrismaPortfolioLedgerVerificationRepository(ext as any);
+    const result = await repoExt.verify({ runId: run.id });
+    expect(result.runId).toBe(run.id);
+    expect(writeCounter).toBe(0);
   });
 
 });
