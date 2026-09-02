@@ -52,7 +52,11 @@ export class PrismaPortfolioLedgerInitializationRepository implements PortfolioL
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        return await this.executeRecoveryTransaction(command.runId);
+        try {
+          return await this.executeRecoveryTransaction(command.runId);
+        } catch (recoveryError) {
+          this.handlePrismaError(recoveryError);
+        }
       }
       this.handlePrismaError(error);
     }

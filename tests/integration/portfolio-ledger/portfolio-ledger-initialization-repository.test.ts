@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { PrismaPortfolioLedgerInitializationRepository } from '../../../src/infrastructure/repositories/portfolio-ledger/PrismaPortfolioLedgerInitializationRepository';
+import { PrismaPortfolioPostingRepository } from '../../../src/infrastructure/repositories/portfolio-ledger/PrismaPortfolioPostingRepository';
+import { PortfolioLedgerPostingDomain } from '../../../src/domain/portfolio-ledger/PortfolioLedgerPosting';
 import {
   PortfolioLedgerInitializationRunNotFoundError,
   PortfolioLedgerInitializationRunNotReadyError,
-  PortfolioLedgerInitializationIntegrityError
+  PortfolioLedgerInitializationIntegrityError,
+  PortfolioLedgerInitializationConcurrencyError
 } from '../../../src/application/ports/portfolio-ledger/PortfolioLedgerInitializationRepositoryPorts';
 import { setupIsolatedTestSchema, IsolatedTestSchema } from '../../utils/database';
 import { randomUUID, randomBytes } from 'crypto';
@@ -249,10 +252,10 @@ describe('PrismaPortfolioLedgerInitializationRepository (Integration)', () => {
     const { run } = await createRun(config.id);
 
     const r1 = await repo.initialize({ runId: run.id });
-    
+
     const instrument = await prisma.marketInstrument.create({
       data: {
-        businessKey: randomUUID(),
+        businessKey: 'VN|HOSE|VNM|EQUITY|2020-01-01',
         exchange: 'HOSE',
         canonicalSymbol: 'VNM',
         securityType: 'EQUITY',
@@ -262,28 +265,50 @@ describe('PrismaPortfolioLedgerInitializationRepository (Integration)', () => {
       }
     });
 
-    // We can simulate a posting by directly updating the head as if a posting occurred
-    // because we aren't testing the posting repo here, we are testing the initialization repo
-    // and we just need the head to be different from genesis.
-    // wait, we can just insert a posting and update head.
-    const newHash = randomBytes(32).toString('hex');
-    await prisma.portfolioLedger.update({
-      where: { id: r1.ledgerId },
-      data: {
-        currentCashBalanceVnd: 500n,
-        lastEntrySequence: 1n,
-        lastEntryHash: newHash,
-        version: { increment: 1 }
+    const postingRepo = new PrismaPortfolioPostingRepository(prisma);
+
+    const appendResult = await postingRepo.append({
+      ledgerId: r1.ledgerId,
+      effectiveDate: '2026-08-01',
+      settlement: {
+        sourceExecutionHash: randomBytes(32).toString('hex'),
+        instrumentBusinessKey: 'VN|HOSE|VNM|EQUITY|2020-01-01',
+        quantityDelta: 100n,
+        grossCashDeltaVnd: -5000000n,
+        feeVnd: 0n,
+        taxVnd: 0n
       }
     });
 
+    const posting = appendResult.posting;
+
+    const before = await prisma.portfolioLedger.findUnique({ where: { id: r1.ledgerId } });
+    expect(before!.lastEntrySequence).toBe(1n);
+    expect(before!.lastEntryHash).toBe(posting.entry.entryHash);
+    expect(before!.version).toBe(2);
+
+    const positions = await prisma.portfolioLedgerPosition.findMany({ where: { ledgerId: r1.ledgerId } });
+    expect(positions.length).toBe(1);
+
+    const postingsCount = await prisma.portfolioLedgerPosting.count({ where: { ledgerId: r1.ledgerId } });
+    expect(postingsCount).toBe(1);
+
     const r2 = await repo.initialize({ runId: run.id });
     expect(r2.disposition).toBe('REPLAYED');
-    
+
     const after = await prisma.portfolioLedger.findUnique({ where: { id: r1.ledgerId } });
-    expect(after!.currentCashBalanceVnd).toBe(500n);
-    expect(after!.lastEntrySequence).toBe(1n);
-    expect(after!.lastEntryHash).toBe(newHash);
+    expect(after!.currentCashBalanceVnd).toBe(before!.currentCashBalanceVnd);
+    expect(after!.lastEntrySequence).toBe(before!.lastEntrySequence);
+    expect(after!.lastEntryHash).toBe(before!.lastEntryHash);
+    expect(after!.version).toBe(before!.version);
+
+    const afterPositions = await prisma.portfolioLedgerPosition.findMany({ where: { ledgerId: r1.ledgerId } });
+    expect(afterPositions.length).toBe(1);
+    expect(afterPositions[0].quantity).toBe(positions[0].quantity);
+    expect(afterPositions[0].version).toBe(positions[0].version);
+
+    const afterPostingsCount = await prisma.portfolioLedgerPosting.count({ where: { ledgerId: r1.ledgerId } });
+    expect(afterPostingsCount).toBe(1);
   });
 
   it('R: later legitimate Run status + existing ledger -> REPLAYED allowed', async () => {
@@ -339,19 +364,19 @@ describe('PrismaPortfolioLedgerInitializationRepository (Integration)', () => {
         }
       }
     }) as any;
-    
+
     const faultyRepo = new PrismaPortfolioLedgerInitializationRepository(faultyPrisma);
 
     await expect(faultyRepo.initialize({ runId: randomUUID() }))
       .rejects.toThrow('Portfolio ledger initialization concurrency error.');
   });
-  
+
   it('U: IMPOSSIBLE INITIALIZED + EXISTING LEDGER -> IntegrityError', async () => {
     const config = await createConfig();
     const { run } = await createRun(config.id);
 
     await repo.initialize({ runId: run.id });
-    
+
     const tamperedPrisma = prisma.$extends({
       query: {
         async $queryRaw({ args, query }: any) {
@@ -366,6 +391,153 @@ describe('PrismaPortfolioLedgerInitializationRepository (Integration)', () => {
 
     const tamperedRepo = new PrismaPortfolioLedgerInitializationRepository(tamperedPrisma);
     await expect(tamperedRepo.initialize({ runId: run.id }))
+      .rejects.toThrowError(PortfolioLedgerInitializationIntegrityError);
+  });
+
+  it('V: P2002 RECOVERY SUCCESS TEST', async () => {
+    const config = await createConfig();
+    const { run } = await createRun(config.id);
+
+    // Initial creation normal
+    const r1 = await repo.initialize({ runId: run.id });
+
+    // Mock initial findUnique to return null, forcing a create which throws P2002
+    let fakeCount = 0;
+    const tamperedPrisma = prisma.$extends({
+      query: {
+        async $queryRaw({ args, query }: any) {
+           return await query(args);
+        },
+        portfolioLedger: {
+          async findUnique({ args, query }: any) {
+            // we ONLY want to fake it missing on the FIRST call (which happens in executeInitializeTransaction)
+            // The retry transaction will call it again, and we must return the real one
+            if (fakeCount === 0) {
+              fakeCount = 1;
+              return null;
+            }
+            return await query(args);
+          }
+        }
+      }
+    }) as any;
+
+    const tamperedRepo = new PrismaPortfolioLedgerInitializationRepository(tamperedPrisma);
+    const result = await tamperedRepo.initialize({ runId: run.id });
+
+    expect(result.disposition).toBe('REPLAYED');
+    expect(result.ledgerId).toBe(r1.ledgerId);
+    expect(result.genesis.genesisHash).toBe(r1.genesis.genesisHash);
+
+    const count = await prisma.portfolioLedger.count({ where: { runId: run.id }});
+    expect(count).toBe(1);
+  });
+
+  it('W: P2002 RECOVERY NO-WINNER TEST', async () => {
+    const config = await createConfig();
+    const { run } = await createRun(config.id);
+
+    const tamperedPrisma = prisma.$extends({
+      query: {
+        portfolioLedger: {
+          async create({ args, query }: any) {
+            throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+              code: 'P2002',
+              clientVersion: 'x',
+              meta: { target: ['runId'] }
+            });
+          }
+        }
+      }
+    }) as any;
+
+    const tamperedRepo = new PrismaPortfolioLedgerInitializationRepository(tamperedPrisma);
+
+    await expect(tamperedRepo.initialize({ runId: run.id }))
+      .rejects.toThrowError(PortfolioLedgerInitializationIntegrityError);
+  });
+
+  it('X: P2002 RECOVERY PRISMA ERROR-MAPPING TEST', async () => {
+    const config = await createConfig();
+    const { run } = await createRun(config.id);
+
+    let queryCount = 0;
+    const tamperedPrisma = prisma.$extends({
+      query: {
+        portfolioLedger: {
+          async create({ args, query }: any) {
+            throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+              code: 'P2002',
+              clientVersion: 'x',
+              meta: { target: ['runId'] }
+            });
+          }
+        },
+        async $queryRaw({ args, query }: any) {
+          // Inside the recovery tx, we want to throw a raw Prisma error during SimulationRun lock
+          // We can detect it's the recovery because we track calls
+          queryCount++;
+          // First queryRaw is SimulationRun FOR UPDATE in first TX
+          // Second is RunCoreConfigVersion FOR SHARE in first TX
+          // Third is SimulationRun FOR UPDATE in recovery TX!
+          if (queryCount === 3) {
+            throw new Prisma.PrismaClientKnownRequestError('Lock wait timeout', {
+              code: 'P2034',
+              clientVersion: 'x'
+            });
+          }
+          return await query(args);
+        }
+      }
+    }) as any;
+
+    const tamperedRepo = new PrismaPortfolioLedgerInitializationRepository(tamperedPrisma);
+
+    await expect(tamperedRepo.initialize({ runId: run.id }))
+      .rejects.toThrowError(PortfolioLedgerInitializationConcurrencyError);
+  });
+
+  it('Y: READINESS CORRUPTION - missing dataOriginHash', async () => {
+    const config = await createConfig();
+    const { run } = await createRun(config.id);
+
+    const tamperedPrisma = prisma.$extends({
+      query: {
+        async $queryRaw({ args, query }: any) {
+          const res = await query(args);
+          if (Array.isArray(res) && res.length > 0 && res[0].status === 'CONFIGURED') {
+            res[0].dataOriginHash = null;
+          }
+          return res;
+        }
+      }
+    }) as any;
+    const repo = new PrismaPortfolioLedgerInitializationRepository(tamperedPrisma);
+
+
+    await expect(repo.initialize({ runId: run.id }))
+      .rejects.toThrowError(PortfolioLedgerInitializationIntegrityError);
+  });
+
+  it('Z: READINESS CORRUPTION - negative initialCapital', async () => {
+    const config = await createConfig();
+    const { run } = await createRun(config.id);
+
+    const tamperedPrisma = prisma.$extends({
+      query: {
+        async $queryRaw({ args, query }: any) {
+          const res = await query(args);
+          if (Array.isArray(res) && res.length > 0 && res[0].initialCapital !== undefined) {
+            res[0].initialCapital = -100n;
+          }
+          return res;
+        }
+      }
+    }) as any;
+    const repo = new PrismaPortfolioLedgerInitializationRepository(tamperedPrisma);
+
+
+    await expect(repo.initialize({ runId: run.id }))
       .rejects.toThrowError(PortfolioLedgerInitializationIntegrityError);
   });
 });
