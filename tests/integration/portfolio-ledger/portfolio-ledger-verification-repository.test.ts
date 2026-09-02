@@ -519,4 +519,32 @@ describe('PrismaPortfolioLedgerVerificationRepository', () => {
     expect(writeCounter).toBe(0);
   });
 
+  it('AG: REAL INITIALIZED + NO LEDGER + NULLABLE PARENT -> LedgerNotFoundError', async () => {
+    const config = await prisma.runCoreConfigVersion.create({
+      data: {
+        contentHash: randomUUID().replace(/-/g, ''),
+        mode: 'HISTORICAL_REPLAY',
+        initialCapital: 100000000n,
+        codeVersion: '1.0.0',
+        rngSeed: 1234n,
+        fillPolicyVersionKey: 'fill_policy_1',
+        orchestrationVersionKey: 'orch_1',
+        sealedAt: new Date()
+      }
+    });
+
+    const run = await prisma.simulationRun.create({
+      data: {
+        creationIdempotencyKey: randomUUID(),
+        creationRequestHash: randomUUID().replace(/-/g, ''),
+        configVersionId: config.id,
+        mode: 'HISTORICAL_REPLAY',
+        status: 'INITIALIZED'
+      }
+    });
+
+    const repoExt = new PrismaPortfolioLedgerVerificationRepository(prisma);
+    await expect(repoExt.verify({ runId: run.id })).rejects.toThrow(PortfolioLedgerVerificationLedgerNotFoundError);
+  });
+
 });
