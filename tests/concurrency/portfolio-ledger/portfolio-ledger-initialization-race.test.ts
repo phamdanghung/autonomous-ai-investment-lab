@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { PrismaPortfolioLedgerInitializationRepository } from '../../../src/infrastructure/repositories/portfolio-ledger/PrismaPortfolioLedgerInitializationRepository';
 import { setupIsolatedTestSchema, IsolatedTestSchema } from '../../utils/database';
 import { randomUUID, randomBytes } from 'crypto';
@@ -66,21 +66,35 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
   }
 
   class QueryBarrier {
-    private resolveWait: () => void;
-    public waitPromise: Promise<void>;
-    public arrived = 0;
+    private arrived = 0;
+    private readonly target: number;
 
-    constructor() {
-      this.resolveWait = () => {};
-      this.waitPromise = new Promise((r) => { this.resolveWait = r; });
+    private resolveReady!: () => void;
+    readonly readyPromise: Promise<void>;
+
+    private resolveRelease!: () => void;
+    readonly releasePromise: Promise<void>;
+
+    constructor(target: number) {
+      this.target = target;
+      this.readyPromise = new Promise((resolve) => { this.resolveReady = resolve; });
+      this.releasePromise = new Promise((resolve) => { this.resolveRelease = resolve; });
     }
 
-    arrive() {
+    async arriveAndWait(): Promise<void> {
       this.arrived++;
+      if (this.arrived === this.target) {
+        this.resolveReady();
+      }
+      await this.releasePromise;
     }
 
-    release() {
-      this.resolveWait();
+    waitUntilReady(): Promise<void> {
+      return this.readyPromise;
+    }
+
+    release(): void {
+      this.resolveRelease();
     }
   }
 
@@ -88,16 +102,14 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
     const config = await createConfig();
     const run = await createRun(config.id);
 
-    const barrier = new QueryBarrier();
+    const barrier = new QueryBarrier(2);
 
     const extendedA = prismaA.$extends({
       query: {
         async $queryRaw({ args, query }: any) {
-          // Detect the SimulationRun FOR UPDATE
           const sql = args.values ? args.strings.join('?') : args.sql || args.strings?.join('');
           if (sql && sql.includes('FOR UPDATE') && sql.includes('SimulationRun')) {
-            barrier.arrive();
-            await barrier.waitPromise;
+            await barrier.arriveAndWait();
           }
           return await query(args);
         }
@@ -109,8 +121,7 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
         async $queryRaw({ args, query }: any) {
           const sql = args.values ? args.strings.join('?') : args.sql || args.strings?.join('');
           if (sql && sql.includes('FOR UPDATE') && sql.includes('SimulationRun')) {
-            barrier.arrive();
-            await barrier.waitPromise;
+            await barrier.arriveAndWait();
           }
           return await query(args);
         }
@@ -123,11 +134,7 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
     const pA = repoExtA.initialize({ runId: run.id });
     const pB = repoExtB.initialize({ runId: run.id });
 
-    // Wait until both arrive at the barrier
-    while (barrier.arrived < 2) {
-      await new Promise(r => setImmediate(r));
-    }
-
+    await barrier.waitUntilReady();
     barrier.release();
 
     const results = await Promise.all([pA, pB]);
@@ -144,15 +151,14 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
     const run1 = await createRun(config.id);
     const run2 = await createRun(config.id);
 
-    const barrier = new QueryBarrier();
+    const barrier = new QueryBarrier(2);
 
     const extendedA = prismaA.$extends({
       query: {
         async $queryRaw({ args, query }: any) {
           const sql = args.values ? args.strings.join('?') : args.sql || args.strings?.join('');
           if (sql && sql.includes('FOR SHARE') && sql.includes('RunCoreConfigVersion')) {
-            barrier.arrive();
-            await barrier.waitPromise;
+            await barrier.arriveAndWait();
           }
           return await query(args);
         }
@@ -164,8 +170,7 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
         async $queryRaw({ args, query }: any) {
           const sql = args.values ? args.strings.join('?') : args.sql || args.strings?.join('');
           if (sql && sql.includes('FOR SHARE') && sql.includes('RunCoreConfigVersion')) {
-            barrier.arrive();
-            await barrier.waitPromise;
+            await barrier.arriveAndWait();
           }
           return await query(args);
         }
@@ -178,10 +183,7 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
     const pA = repoExtA.initialize({ runId: run1.id });
     const pB = repoExtB.initialize({ runId: run2.id });
 
-    while (barrier.arrived < 2) {
-      await new Promise(r => setImmediate(r));
-    }
-
+    await barrier.waitUntilReady();
     barrier.release();
 
     const results = await Promise.all([pA, pB]);
@@ -193,15 +195,14 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
     const config = await createConfig();
     const run = await createRun(config.id);
 
-    const barrier = new QueryBarrier();
+    const barrier = new QueryBarrier(1);
 
     const extendedA = prismaA.$extends({
       query: {
         async $queryRaw({ args, query }: any) {
           const sql = args.values ? args.strings.join('?') : args.sql || args.strings?.join('');
           if (sql && sql.includes('FOR SHARE') && sql.includes('RunCoreConfigVersion')) {
-            barrier.arrive();
-            await barrier.waitPromise;
+            await barrier.arriveAndWait();
           }
           return await query(args);
         }
@@ -214,12 +215,15 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
     const pA = repoExtA.initialize({ runId: run.id });
 
     // Wait until initializer has acquired Run lock and arrived at Config lock
-    while (barrier.arrived < 1) {
-      await new Promise(r => setImmediate(r));
-    }
+    await barrier.waitUntilReady();
 
     // Now start the competing status transition in B (it will block because A holds the Run lock)
-    const pB = prismaB.$executeRawUnsafe(`UPDATE "SimulationRun" SET "status" = 'RUNNING', "version" = "version" + 1 WHERE "id" = '${run.id}' AND "status" = 'CONFIGURED'`);
+    // Using safe tagged Prisma SQL
+    const pB = prismaB.$executeRaw`
+      UPDATE "SimulationRun"
+      SET "status" = 'RUNNING', "version" = "version" + 1
+      WHERE "id" = ${run.id} AND "status" = 'CONFIGURED' AND "version" = 1
+    `;
 
     // Release A to finish
     barrier.release();
@@ -240,34 +244,57 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
     const config = await createConfig();
     const run = await createRun(config.id);
 
-    const barrier = new QueryBarrier();
+    let resolveTransitionHasRunLock!: () => void;
+    const transitionHasRunLock = new Promise<void>(r => { resolveTransitionHasRunLock = r; });
 
-    // We need transition to lock first. We can do this explicitly with a tx on B
+    let resolveInitializerAttemptedRunLock!: () => void;
+    const initializerAttemptedRunLock = new Promise<void>(r => { resolveInitializerAttemptedRunLock = r; });
+
+    // Start Transition B
     const pB = prismaB.$transaction(async (tx) => {
-      // 1. B locks the run
-      await tx.$executeRawUnsafe(`SELECT id FROM "SimulationRun" WHERE "id" = '${run.id}' FOR UPDATE`);
+      // 1. B locks the run using safe tagged query
+      await tx.$queryRaw`
+        SELECT "id"
+        FROM "SimulationRun"
+        WHERE "id" = ${run.id}
+        FOR UPDATE
+      `;
 
       // 2. Signal that B has locked
-      barrier.arrive();
+      resolveTransitionHasRunLock();
 
       // 3. Wait until A has tried to lock and is blocking
-      await barrier.waitPromise;
+      await initializerAttemptedRunLock;
 
-      // 4. Perform the transition
-      await tx.$executeRawUnsafe(`UPDATE "SimulationRun" SET "status" = 'RUNNING', "version" = "version" + 1 WHERE "id" = '${run.id}'`);
+      // 4. Perform the transition using CAS tagged query
+      const affected = await tx.$executeRaw`
+        UPDATE "SimulationRun"
+        SET "status" = 'RUNNING', "version" = "version" + 1
+        WHERE "id" = ${run.id} AND "status" = 'CONFIGURED' AND "version" = 1
+      `;
+      expect(affected).toBe(1);
     });
 
     // Wait for B to lock
-    while (barrier.arrived < 1) {
-      await new Promise(r => setImmediate(r));
-    }
+    await transitionHasRunLock;
+
+    const extendedA = prismaA.$extends({
+      query: {
+        async $queryRaw({ args, query }: any) {
+          const sql = args.values ? args.strings.join('?') : args.sql || args.strings?.join('');
+          if (sql && sql.includes('FOR UPDATE') && sql.includes('SimulationRun')) {
+            // Signal before executing query (which will block)
+            resolveInitializerAttemptedRunLock();
+          }
+          return await query(args);
+        }
+      }
+    }) as any;
+
+    const repoExtA = new PrismaPortfolioLedgerInitializationRepository(extendedA);
 
     // Now start initializer in A (it will block)
-    const pA = repoA.initialize({ runId: run.id });
-
-    // Since we can't reliably detect A blocking using standard prisma query extension
-    // because the query just hangs in the DB engine, we can just release B and A will follow.
-    barrier.release();
+    const pA = repoExtA.initialize({ runId: run.id });
 
     await pB; // B completes
 
@@ -275,6 +302,9 @@ describe('PrismaPortfolioLedgerInitializationRepository (Concurrency)', () => {
 
     const count = await prismaA.portfolioLedger.count({ where: { runId: run.id } });
     expect(count).toBe(0);
+
+    const checkRun = await prismaA.simulationRun.findUnique({ where: { id: run.id } });
+    expect(checkRun!.status).toBe('RUNNING');
   });
 
 });
