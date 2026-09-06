@@ -130,6 +130,14 @@ export class SimulationOrderAcceptanceDomain {
         throw new Error('Hard result checks do not match exactly the required canonical BUY or SELL sets.');
       }
 
+      if (validatedIntent.side === 'BUY' && !isBuy) {
+        throw new Error('BUY intent requires canonical BUY Hard Market Integrity check set.');
+      }
+
+      if (validatedIntent.side === 'SELL' && !isSell) {
+        throw new Error('SELL intent requires canonical SELL Hard Market Integrity check set.');
+      }
+
       if (!strategy || typeof strategy !== 'object' || Array.isArray(strategy)) {
         throw new Error('strategyRiskResult must be a non-null object.');
       }

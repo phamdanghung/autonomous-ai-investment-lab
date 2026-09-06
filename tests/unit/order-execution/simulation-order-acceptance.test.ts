@@ -498,4 +498,32 @@ describe('SimulationOrderAcceptanceDomain', () => {
       expect((result as any).id).toBeUndefined();
     });
   });
+
+  describe('Hard Risk Side Binding Tests', () => {
+    it('106. BUY intent rejects canonical SELL Hard check set', () => {
+      const hard = SimulationRiskCheckResultDomain.build({
+        ...FROZEN_HARD_PASS_RESULT,
+        checks: FROZEN_SELL_HARD_PASS_RESULT.checks
+      });
+      expectThrow({
+        intent: FROZEN_BUY_INTENT,
+        strategyRiskResult: FROZEN_STRATEGY_PASS_RESULT,
+        eligibleSessionDate: '2026-08-03',
+        hardMarketIntegrityResult: hard
+      });
+    });
+
+    it('107. SELL intent rejects canonical BUY Hard check set', () => {
+      const hard = SimulationRiskCheckResultDomain.build({
+        ...FROZEN_SELL_HARD_PASS_RESULT,
+        checks: FROZEN_HARD_PASS_RESULT.checks
+      });
+      expectThrow({
+        intent: FROZEN_SELL_INTENT,
+        strategyRiskResult: FROZEN_SELL_STRATEGY_PASS_RESULT,
+        eligibleSessionDate: '2026-08-03',
+        hardMarketIntegrityResult: hard
+      });
+    });
+  });
 });
