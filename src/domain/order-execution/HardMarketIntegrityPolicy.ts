@@ -35,6 +35,10 @@ export class HardMarketIntegrityPolicyDomain {
         throw new Error('Intent is required.');
       }
 
+      if (typeof intent.quantity !== 'string' || !/^[1-9][0-9]*$/.test(intent.quantity)) {
+        throw new Error('quantity must be a canonical positive decimal string.');
+      }
+
       let rebuilt;
       try {
         rebuilt = SimulationOrderIntentDomain.build({
@@ -50,8 +54,19 @@ export class HardMarketIntegrityPolicyDomain {
         throw new Error(`Failed to rebuild intent: ${e.message}`);
       }
 
-      if (rebuilt.intentHash !== intent.intentHash) {
-        throw new Error('Intent hash mismatch.');
+      if (
+        intent.contractVersion !== rebuilt.contractVersion ||
+        intent.orderKind !== rebuilt.orderKind ||
+        intent.runBusinessKey !== rebuilt.runBusinessKey ||
+        intent.simulationDate !== rebuilt.simulationDate ||
+        intent.instrumentBusinessKey !== rebuilt.instrumentBusinessKey ||
+        intent.side !== rebuilt.side ||
+        intent.quantity !== rebuilt.quantity ||
+        intent.orderType !== rebuilt.orderType ||
+        intent.sourceDecisionHash !== rebuilt.sourceDecisionHash ||
+        intent.intentHash !== rebuilt.intentHash
+      ) {
+        throw new Error('Intent canonical integrity mismatch.');
       }
 
       if (typeof policyVersionHash !== 'string' || !/^[a-f0-9]{64}$/.test(policyVersionHash)) {

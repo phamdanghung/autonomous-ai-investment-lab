@@ -44,7 +44,7 @@ describe('HardMarketIntegrityPolicyDomain', () => {
       const result = HardMarketIntegrityPolicyDomain.evaluate(validBuyBase);
       expect(result.passed).toBe(true);
     });
-    
+
     it('2. availableCash == requiredCash PASS', () => {
       const result = HardMarketIntegrityPolicyDomain.evaluate({ ...validBuyBase, availableCashVnd: 1500000n, requiredCashVnd: 1500000n });
       expect(result.passed).toBe(true);
@@ -81,10 +81,10 @@ describe('HardMarketIntegrityPolicyDomain', () => {
     });
 
     it('9. multiple simultaneous failures aggregate to false', () => {
-      const result = HardMarketIntegrityPolicyDomain.evaluate({ 
-        ...validBuyBase, 
-        idempotencyUnique: false, 
-        marketDataValid: false 
+      const result = HardMarketIntegrityPolicyDomain.evaluate({
+        ...validBuyBase,
+        idempotencyUnique: false,
+        marketDataValid: false
       });
       expect(result.passed).toBe(false);
     });
@@ -220,7 +220,7 @@ describe('HardMarketIntegrityPolicyDomain', () => {
     it('43. boardLotSize string', () => expectThrow({ ...validBuyBase, boardLotSize: '100' }));
     it('44. boardLotSize zero', () => expectThrow({ ...validBuyBase, boardLotSize: 0n }));
     it('45. boardLotSize negative', () => expectThrow({ ...validBuyBase, boardLotSize: -100n }));
-    
+
     it('46. availableCash null', () => expectThrow({ ...validBuyBase, availableCashVnd: null }));
     it('47. availableCash number', () => expectThrow({ ...validBuyBase, availableCashVnd: 1000 }));
     it('48. availableCash negative', () => expectThrow({ ...validBuyBase, availableCashVnd: -10n }));
@@ -379,6 +379,61 @@ describe('HardMarketIntegrityPolicyDomain', () => {
     it('82. correct prototype behavior', () => {
       const error = getError();
       expect(Object.getPrototypeOf(error)).toBe(HardMarketIntegrityPolicyInvalidError.prototype);
+    });
+  });
+
+  describe('Canonical Intent Integrity Closure', () => {
+    it('83. numeric quantity: 100 rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: 100 } }));
+    it('84. "0100" rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: '0100' } }));
+    it('85. "+100" rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: '+100' } }));
+    it('86. "0x64" rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: '0x64' } }));
+    it('87. " 100 " rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: ' 100 ' } }));
+    it('88. "1e2" rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: '1e2' } }));
+    it('89. "100.0" rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: '100.0' } }));
+    it('90. "0" rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: '0' } }));
+    it('91. negative decimal quantity rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, quantity: '-100' } }));
+    it('92. missing contractVersion rejected', () => {
+      const intent: any = { ...FROZEN_BUY_INTENT };
+      delete intent.contractVersion;
+      expectThrow({ ...validBuyBase, intent });
+    });
+    it('93. wrong contractVersion rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, contractVersion: '2.0' } }));
+    it('94. missing orderKind rejected', () => {
+      const intent: any = { ...FROZEN_BUY_INTENT };
+      delete intent.orderKind;
+      expectThrow({ ...validBuyBase, intent });
+    });
+    it('95. wrong orderKind rejected', () => expectThrow({ ...validBuyBase, intent: { ...FROZEN_BUY_INTENT, orderKind: 'OTHER' } }));
+
+    it('96. canonical frozen BUY intent still accepted', () => {
+      const result = HardMarketIntegrityPolicyDomain.evaluate(validBuyBase);
+      expect(result.passed).toBe(true);
+    });
+
+    it('97. canonical rebuilt SELL intent still accepted', () => {
+      const validSellBase = {
+        ...validBuyBase,
+        intent: FROZEN_SELL_INTENT,
+        availableCashVnd: null,
+        requiredCashVnd: null,
+        sellableQuantity: 100n
+      };
+      const result = HardMarketIntegrityPolicyDomain.evaluate(validSellBase);
+      expect(result.passed).toBe(true);
+    });
+
+    it('98. frozen BUY PASS resultHash remains unchanged', () => {
+      const result = HardMarketIntegrityPolicyDomain.evaluate(validBuyBase);
+      expect(result.resultHash).toBe('c8eeb780b903db47b0523618bc7e06bb811dddc1acd8ebdfb48cc67547ea8110');
+    });
+
+    it('99. frozen insufficient-cash resultHash remains unchanged', () => {
+      const result = HardMarketIntegrityPolicyDomain.evaluate({
+        ...validBuyBase,
+        availableCashVnd: 2000000n,
+        requiredCashVnd: 2500000n
+      });
+      expect(result.resultHash).toBe('eb113c3baa332b60a3f0663eba7fcd434579f9b8ad8611824050f3e6fd266349');
     });
   });
 });
