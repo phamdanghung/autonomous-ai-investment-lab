@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SimulationOrderReservationDomain, SimulationOrderReservationInvalidError } from '../../../src/domain/order-execution/SimulationOrderReservation';
 import { SimulationOrderIntentDomain } from '../../../src/domain/order-execution/SimulationOrderIntent';
 import { SimulationRiskCheckResultDomain } from '../../../src/domain/order-execution/SimulationRiskCheckResult';
@@ -199,7 +199,7 @@ describe('SimulationOrderReservationDomain', () => {
     it('38. tampered runBusinessKey', () => expectThrow(tampered('runBusinessKey', 'c'.repeat(64))));
     // We will just change a property.
     const tampered = (field: string, val: any) => ({ ...validBuyInput, order: { ...validBuyInput.order, [field]: val } });
-    
+
     it('39. tampered simulationDate', () => expectThrow(tampered('simulationDate', '2026-08-02')));
     it('40. tampered eligibleSessionDate', () => expectThrow(tampered('eligibleSessionDate', '2026-08-04')));
     it('41. tampered instrumentBusinessKey', () => expectThrow(tampered('instrumentBusinessKey', 'VN|HOSE|VNM|EQUITY|2026-08-02')));
@@ -346,11 +346,30 @@ describe('SimulationOrderReservationDomain', () => {
       expect(r.reservedCashVnd).toBe('100');
     });
     it('92. no wall-clock dependency', () => {
-      // Nothing to do but assert our function doesn't use Date.now() internally
-      expect(true).toBe(true);
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2001-01-01T00:00:00.000Z'));
+        const first = SimulationOrderReservationDomain.create(validBuyInput);
+
+        vi.setSystemTime(new Date('2049-12-31T23:59:59.000Z'));
+        const second = SimulationOrderReservationDomain.create(validBuyInput);
+
+        expect(second).toEqual(first);
+        expect(second.reservationHash).toBe(first.reservationHash);
+      } finally {
+        vi.useRealTimers();
+      }
     });
+
     it('93. no random dependency', () => {
-      expect(true).toBe(true);
+      const randomSpy = vi.spyOn(Math, 'random');
+      try {
+        const result = SimulationOrderReservationDomain.create(validBuyInput);
+        expect(result.reservationHash).toBe('499e28d550b73c1ea8a19ebe09e71581967dd4f17cc7cc394eec71f0eed59512');
+        expect(randomSpy).not.toHaveBeenCalled();
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
   });
 
