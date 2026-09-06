@@ -128,7 +128,7 @@ describe('StrategyRiskPolicyDomain', () => {
     it('18. Hard passed=false', () => {
       const failResult = SimulationRiskCheckResultDomain.build({
         ...FROZEN_HARD_PASS_RESULT,
-        checks: FROZEN_HARD_PASS_RESULT.checks.map((c: any) => c.checkCode === 'AVAILABLE_CASH' ? { ...c, passed: false, reasonCode: 'INSUFFICIENT_AVAILABLE_CASH' } : c)
+        checks: FROZEN_HARD_PASS_RESULT.checks.map((c: any) => c.checkCode === 'AVAILABLE_CASH' ? { ...c, passed: false, reasonCode: 'INSUFFICIENT_AVAILABLE_CASH' } as any : c)
       });
       expectThrow({ ...validBase, hardMarketIntegrityResult: failResult });
     });
@@ -141,7 +141,7 @@ describe('StrategyRiskPolicyDomain', () => {
 
     it('20. one Hard check has non-null reasonCode', () => {
       const tampered = { ...FROZEN_HARD_PASS_RESULT, checks: [...FROZEN_HARD_PASS_RESULT.checks] };
-      tampered.checks[0] = { ...tampered.checks[0], reasonCode: 'SOME_REASON' };
+      tampered.checks[0] = { ...tampered.checks[0], reasonCode: 'SOME_REASON' } as any;
       expectThrow({ ...validBase, hardMarketIntegrityResult: tampered });
     });
 
